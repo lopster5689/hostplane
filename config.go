@@ -29,6 +29,7 @@ type Config struct {
 
 	// Infrastructure
 	AppServerIP           string // IP of the app server (containers + caddy)
+	PublicIP              string // Public VPS IP — custom domain A records must point here
 	DockerNetwork         string // Docker network for site containers
 	CloudflaredConfigPath string // path to cloudflared config.yml
 	TunnelName            string // Cloudflare tunnel name
@@ -52,6 +53,7 @@ func LoadConfig() Config {
 		CaddyStaticVolume:     getEnv("CADDY_STATIC_VOLUME", "caddy_static_sites"),
 		BaseDomain:            getEnv("BASE_DOMAIN", "hosto.com"),
 		AppServerIP:           getEnv("APP_SERVER_IP", "***REMOVED***"),
+		PublicIP:              getEnv("PUBLIC_IP", "***REMOVED***"),
 		DockerNetwork:         getEnv("DOCKER_NETWORK", "wp_backend"),
 		CloudflaredConfigPath: getEnv("CLOUDFLARED_CONFIG", "/etc/cloudflared/config.yml"),
 		TunnelName:            getEnv("TUNNEL_NAME", "hosto"),
