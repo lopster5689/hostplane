@@ -19,9 +19,10 @@ type Config struct {
 	DockerHost    string
 	DockerCertDir string // path to TLS certs for app-01
 
-	// Nginx
-	NginxConfDir   string
-	NginxContainer string
+	// Caddy
+	CaddyConfDir      string // path to per-site snippet dir inside Caddy container
+	CaddyContainer    string // Docker container name for Caddy
+	CaddyStaticVolume string // shared Docker volume name mounted at /srv/sites in Caddy
 
 	// Domain
 	BaseDomain string
@@ -46,8 +47,9 @@ func LoadConfig() Config {
 		WordPressDSN:          getEnv("WP_DSN", "control:***REMOVED***@tcp(***REMOVED***:3306)/"),
 		DockerHost:            getEnv("DOCKER_HOST", "tcp://***REMOVED***:2376"),
 		DockerCertDir:         getEnv("DOCKER_CERT_DIR", "/opt/control/certs"),
-		NginxConfDir:          getEnv("NGINX_CONF_DIR", "/opt/nginx/conf.d"),
-		NginxContainer:        getEnv("NGINX_CONTAINER", "edge-nginx"),
+		CaddyConfDir:          getEnv("CADDY_CONF_DIR", "/etc/caddy/sites"),
+		CaddyContainer:        getEnv("CADDY_CONTAINER", "caddy"),
+		CaddyStaticVolume:     getEnv("CADDY_STATIC_VOLUME", "caddy_static_sites"),
 		BaseDomain:            getEnv("BASE_DOMAIN", "hosto.com"),
 		AppServerIP:           getEnv("APP_SERVER_IP", "***REMOVED***"),
 		DockerNetwork:         getEnv("DOCKER_NETWORK", "wp_backend"),
