@@ -175,16 +175,16 @@ DB_ROOT_PASSWORD=***REMOVED***
 
 ## What Each Layer Does
 
-| Layer             | Role                                                                  |
-| ----------------- | --------------------------------------------------------------------- |
-| **Cloudflare**    | HTTPS termination, DDoS protection, hides VPS IP                      |
-| **VPS nginx**     | Dumb TCP forwarder — no SSL, no logic, passes raw bytes               |
+| Layer             | Role                                                                   |
+| ----------------- | ---------------------------------------------------------------------- |
+| **Cloudflare**    | HTTPS termination, DDoS protection, hides VPS IP                       |
+| **VPS nginx**     | Dumb TCP forwarder — no SSL, no logic, passes raw bytes                |
 | **WireGuard**     | Encrypted tunnel between VPS (***REMOVED***) and app-01 (***REMOVED***) |
-| **Caddy**         | Routes by hostname to the correct `nginx_<site>` sidecar              |
-| **nginx\_<site>** | Serves WordPress static assets, proxies PHP requests to FPM           |
-| **php\_<site>**   | WordPress PHP-FPM, owns the site's files and database connection      |
-| **state-01**      | MariaDB — one database per site                                       |
-| **control-01**    | Go control plane binary — provisions/destroys sites via Docker API    |
+| **Caddy**         | Routes by hostname to the correct `nginx_<site>` sidecar               |
+| **nginx\_<site>** | Serves WordPress static assets, proxies PHP requests to FPM            |
+| **php\_<site>**   | WordPress PHP-FPM, owns the site's files and database connection       |
+| **state-01**      | MariaDB — one database per site                                        |
+| **control-01**    | Go control plane binary — provisions/destroys sites via Docker API     |
 
 ---
 

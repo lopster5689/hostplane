@@ -10,11 +10,11 @@ Go control-plane binary (`/opt/control/control-plane`) running as a systemd serv
 
 ## Infrastructure
 
-| Host       | Role                                      | IP             |
-| ---------- | ----------------------------------------- | -------------- |
-| control-01 | control-plane binary, scripts             | LXC internal   |
-| app-01     | Docker host — all site containers + Caddy | ***REMOVED***     |
-| state-01   | MariaDB — one DB per site                 | ***REMOVED***     |
+| Host       | Role                                      | IP              |
+| ---------- | ----------------------------------------- | --------------- |
+| control-01 | control-plane binary, scripts             | LXC internal    |
+| app-01     | Docker host — all site containers + Caddy | ***REMOVED***      |
+| state-01   | MariaDB — one DB per site                 | ***REMOVED***      |
 | VPS        | nginx TCP forwarder only (dumb, no logic) | ***REMOVED*** |
 
 Wildcard DNS `*.cowsaidmoo.tech → ***REMOVED***` (Cloudflare, orange cloud ON, Full Strict).
