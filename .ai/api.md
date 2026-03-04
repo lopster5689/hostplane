@@ -479,11 +479,11 @@ Returns `503` when R2 credentials are not configured on the server.
 
 **Errors**
 
-| Code  | Reason                                          |
-| ----- | ----------------------------------------------- |
-| `404` | Site not found                                  |
-| `500` | Backup failed (container error, R2 upload error)|
-| `503` | R2 credentials not configured on server         |
+| Code  | Reason                                           |
+| ----- | ------------------------------------------------ |
+| `404` | Site not found                                   |
+| `500` | Backup failed (container error, R2 upload error) |
+| `503` | R2 credentials not configured on server          |
 
 ---
 
@@ -544,6 +544,7 @@ Downloads and restores the database and volume backups for the given date.
 Runs **synchronously**.
 
 Flow:
+
 1. Validates `date` is `YYYY-MM-DD` format
 2. HeadObject preflight on both R2 keys — fails fast before touching any data
 3. Streams `.sql.gz` → `gzip.NewReader` → ephemeral `mysql:8` container stdin

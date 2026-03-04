@@ -55,9 +55,11 @@ journalctl -u control-plane -f -n 50
 ```
 
 If R2 credentials are wrong/missing you'll see:
+
 ```
 [main] R2 not configured (...) — backups disabled
 ```
+
 The binary still starts; only backup endpoints will return 503.
 
 ---
@@ -86,8 +88,14 @@ echo "Job: $JOB_ID"
 ```
 
 **Expected `202`:**
+
 ```json
-{"job_id":"...","site":"testsite","domain":"testsite.cowsaidmoo.tech","status":"PENDING"}
+{
+  "job_id": "...",
+  "site": "testsite",
+  "domain": "testsite.cowsaidmoo.tech",
+  "status": "PENDING"
+}
 ```
 
 ```bash
@@ -103,8 +111,9 @@ curl -s -H "X-API-Key: $KEY" $BASE/sites/$SITE | jq '{status,cert_status,warning
 ```
 
 **Expected:**
+
 ```json
-{"status":"ACTIVE","cert_status":"issued","warnings":[]}
+{ "status": "ACTIVE", "cert_status": "issued", "warnings": [] }
 ```
 
 If `cert_status` is `"pending"`, wait ~2 min or go to Part 6 (cert-retry).
@@ -162,14 +171,17 @@ curl -s -X POST $BASE/sites/$SITE/backup \
 ```
 
 **Expected `200`** (takes 10–60s depending on DB/volume size):
+
 ```json
-{"site":"testsite","status":"backed_up","date":"2026-03-04"}
+{ "site": "testsite", "status": "backed_up", "date": "2026-03-04" }
 ```
 
 While this runs, watch the logs:
+
 ```bash
 journalctl -u control-plane -f | grep backupper
 ```
+
 You should see the mysqldump container start, the tar container start, and
 `backup complete (db + volume)`.
 
@@ -231,14 +243,17 @@ curl -s -X POST $BASE/sites/$SITE/restore/$DATE \
 ```
 
 **Expected `200`** (takes ~10–60s):
+
 ```json
-{"site":"testsite","date":"2026-03-04","status":"restored"}
+{ "site": "testsite", "date": "2026-03-04", "status": "restored" }
 ```
 
 Watch logs during this:
+
 ```bash
 journalctl -u control-plane -f | grep -E 'backupper|restore'
 ```
+
 You should see the mysql restore container start and exit 0, then the tar
 restore container start and exit 0.
 
@@ -276,6 +291,7 @@ watch -n 5 "curl -s -H 'X-API-Key: $KEY' $BASE/jobs/$JOB_ID | jq '{status,error}
 
 In the logs you should see a pre-destroy backup fire before any containers are
 removed:
+
 ```
 [backupper] site=testsite backup complete (db + volume)
 [destroyer] site=testsite removing container php_testsite ...
