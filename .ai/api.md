@@ -44,6 +44,9 @@ Returns `401 Unauthorized` if the key is missing or wrong:
 | `DELETE` | `/api/sites/:site/domain`        | Remove the custom domain                  |
 | `GET`    | `/api/sites/:site/domain/status` | Live DNS + cert status (poll from UI)     |
 | `POST`   | `/api/sites/:site/cert-retry`    | Force Caddy reload + poll cert            |
+| `POST`   | `/api/sites/:site/backup`        | On-demand backup (DB + volume)            |
+| `GET`    | `/api/sites/:site/backups`       | List all backups for a site               |
+| `POST`   | `/api/sites/:site/restore/:date` | Restore DB + volume from a backup date    |
 | `GET`    | `/api/jobs/:id`                  | Get job status                            |
 | `DELETE` | `/api/jobs/:id`                  | Hard delete a completed/failed job record |
 
@@ -202,6 +205,7 @@ For `ACTIVE` and `DOMAIN_ACTIVE` sites, verifies:
   "cert_status": "issued",
   "warnings": [],
   "job_id": "63c83c3f-...",
+  "last_backup_at": "2026-03-04T02:00:00Z",
   "created_at": "2026-02-25T02:56:20Z",
   "updated_at": "2026-02-25T02:56:52Z"
 }
@@ -458,6 +462,115 @@ Use this when:
 
 ---
 
+## `POST /api/sites/:site/backup`
+
+Triggers an on-demand backup of the site's MariaDB database and Docker volume.
+Runs **synchronously** — the response is only returned once both uploads to R2
+are complete. Both backups must succeed; a failure in either aborts and returns
+an error without updating `last_backup_at`.
+
+Returns `503` when R2 credentials are not configured on the server.
+
+**Response `200`**
+
+```json
+{ "site": "mysite", "status": "backed_up", "date": "2026-03-04" }
+```
+
+**Errors**
+
+| Code  | Reason                                          |
+| ----- | ----------------------------------------------- |
+| `404` | Site not found                                  |
+| `500` | Backup failed (container error, R2 upload error)|
+| `503` | R2 credentials not configured on server         |
+
+---
+
+## `GET /api/sites/:site/backups`
+
+Lists all backup objects stored in R2 for the site — both database and volume
+entries, across all dates.
+
+**Response `200`**
+
+```json
+{
+  "site": "mysite",
+  "backups": [
+    {
+      "date": "2026-03-03",
+      "type": "database",
+      "key": "databases/mysite/2026-03-03.sql.gz",
+      "size_bytes": 204800
+    },
+    {
+      "date": "2026-03-03",
+      "type": "volume",
+      "key": "volumes/mysite/2026-03-03.tar.gz",
+      "size_bytes": 10485760
+    },
+    {
+      "date": "2026-03-04",
+      "type": "database",
+      "key": "databases/mysite/2026-03-04.sql.gz",
+      "size_bytes": 208000
+    },
+    {
+      "date": "2026-03-04",
+      "type": "volume",
+      "key": "volumes/mysite/2026-03-04.tar.gz",
+      "size_bytes": 10600000
+    }
+  ]
+}
+```
+
+An empty `"backups": []` means no backups have been taken yet.
+
+**Errors**
+
+| Code  | Reason                                  |
+| ----- | --------------------------------------- |
+| `404` | Site not found                          |
+| `500` | R2 list request failed                  |
+| `503` | R2 credentials not configured on server |
+
+---
+
+## `POST /api/sites/:site/restore/:date`
+
+Downloads and restores the database and volume backups for the given date.
+Runs **synchronously**.
+
+Flow:
+1. Validates `date` is `YYYY-MM-DD` format
+2. HeadObject preflight on both R2 keys — fails fast before touching any data
+3. Streams `.sql.gz` → `gzip.NewReader` → ephemeral `mysql:8` container stdin
+4. Streams `.tar.gz` → ephemeral `alpine` `tar -xzf` container stdin (volume mounted read-write)
+
+> ⚠️ The site's running containers (`php_<site>`, `nginx_<site>`) are **not
+> stopped** automatically. For a fully consistent restore, quiesce DB writes
+> first. For WordPress (all InnoDB, dump includes `DROP TABLE IF EXISTS`) this
+> is generally safe in practice.
+
+**Response `200`**
+
+```json
+{ "site": "mysite", "date": "2026-03-03", "status": "restored" }
+```
+
+**Errors**
+
+| Code  | Reason                                              |
+| ----- | --------------------------------------------------- |
+| `400` | Invalid date format (not `YYYY-MM-DD`)              |
+| `404` | Site not found                                      |
+| `500` | Backup not found in R2, or restore container failed |
+| `503` | R2 credentials not configured on server             |
+
+---
+
 ## `GET /api/jobs/:id`
 
 Returns the current state of a provisioning or destroy job.
@@ -622,4 +735,32 @@ JOB_ID=$(curl -s -X POST https://api.cowsaidmoo.tech/api/destroy \
 # 2. Wait for COMPLETED, then hard delete the record
 curl -s -X DELETE https://api.cowsaidmoo.tech/api/sites/mysite \
   -H "X-API-Key: $KEY"
+```
+
+### Trigger an on-demand backup
+
+```bash
+curl -s -X POST https://api.cowsaidmoo.tech/api/sites/mysite/backup \
+  -H "X-API-Key: $KEY" | jq .
+# {"site":"mysite","status":"backed_up","date":"2026-03-04"}
+```
+
+### List all backups for a site
+
+```bash
+curl -s -H "X-API-Key: $KEY" \
+  https://api.cowsaidmoo.tech/api/sites/mysite/backups | jq '.backups[] | {date,type,size_bytes}'
+```
+
+### Restore a site from a specific date
+
+```bash
+# 1. Check which dates are available
+curl -s -H "X-API-Key: $KEY" \
+  https://api.cowsaidmoo.tech/api/sites/mysite/backups | jq '[.backups[].date] | unique'
+
+# 2. Restore from a chosen date (synchronous — waits for both DB + volume)
+curl -s -X POST https://api.cowsaidmoo.tech/api/sites/mysite/restore/2026-03-03 \
+  -H "X-API-Key: $KEY" | jq .
+# {"site":"mysite","date":"2026-03-03","status":"restored"}
 ```
