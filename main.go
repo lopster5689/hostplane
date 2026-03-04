@@ -73,6 +73,9 @@ func main() {
 		backupWorker := NewBackupWorker(backupper, cfg)
 		go backupWorker.Start()
 		log.Println("[main] backup worker started")
+
+		go NewInfraBackupWorker(NewInfraBackupper(docker, cfg, r2)).Start()
+		log.Println("[main] infra backup worker started")
 	}
 
 	// ── HTTP API ─────────────────────────────────────────────────────
