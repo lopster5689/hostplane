@@ -182,10 +182,11 @@ func (b *InfraBackupper) BackupDockerCerts(ctx context.Context) error {
 	go func() {
 		gz := gzip.NewWriter(pw)
 		tw := tar.NewWriter(gz)
-		archiveDone <- tarDir(tw, certDir)
+		err := tarDir(tw, certDir)
 		tw.Close()
 		gz.Close()
-		pw.Close()
+		pw.CloseWithError(err) // close pipe first so Upload can complete
+		archiveDone <- err
 	}()
 
 	uploadErr := b.r2.Upload(ctx, key, pr, "application/gzip")
@@ -245,34 +246,59 @@ func tarDir(tw *tar.Writer, dir string) error {
 }
 
 // waitContainer blocks until the container exits and returns its exit code.
-// Mirrors the helper in backupper.go.
+// Mirrors the helper in backupper.go exactly, including the status.Error check.
 func (b *InfraBackupper) waitContainer(ctx context.Context, id string) (int64, error) {
 	statusCh, errCh := b.docker.ContainerWait(ctx, id, container.WaitConditionNotRunning)
 	select {
 	case err := <-errCh:
 		return -1, err
 	case status := <-statusCh:
+		if status.Error != nil {
+			return -1, fmt.Errorf("%s", status.Error.Message)
+		}
 		return status.StatusCode, nil
 	}
 }
 
-// logContainerStderr prints the last 4 KB of stderr for a container to the
-// control-plane log. Mirrors the helper in backupper.go.
+// logContainerStderr fetches and logs up to 4 KB of stderr from an exited
+// container. Strips the 8-byte Docker multiplexed-stream header from each frame
+// so the log output is plain text, not binary-prefixed lines.
 func (b *InfraBackupper) logContainerStderr(id, label string) {
 	logCtx, logCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer logCancel()
 	rc, err := b.docker.ContainerLogs(logCtx, id, types.ContainerLogsOptions{
+		ShowStdout: false,
 		ShowStderr: true,
-		Tail:       "50",
 	})
 	if err != nil {
 		log.Printf("[infra-backup] %s: could not retrieve container stderr: %v", label, err)
 		return
 	}
 	defer rc.Close()
-	buf := &strings.Builder{}
-	io.Copy(buf, rc) //nolint
-	log.Printf("[infra-backup] %s stderr:\n%s", label, buf.String())
+
+	// Docker mux format: [stream_type(1)] [pad(3)] [size(4)] [data...]
+	var buf strings.Builder
+	header := make([]byte, 8)
+	for buf.Len() < 4096 {
+		if _, err := io.ReadFull(rc, header); err != nil {
+			break
+		}
+		size := int64(header[4])<<24 | int64(header[5])<<16 | int64(header[6])<<8 | int64(header[7])
+		remaining := int64(4096 - buf.Len())
+		if size <= remaining {
+			data := make([]byte, size)
+			io.ReadFull(rc, data) //nolint
+			buf.Write(data)
+		} else {
+			data := make([]byte, remaining)
+			io.ReadFull(rc, data) //nolint
+			buf.Write(data)
+			io.CopyN(io.Discard, rc, size-remaining) //nolint
+		}
+	}
+	if buf.Len() > 0 {
+		log.Printf("[infra-backup] %s stderr: %s", label, strings.TrimSpace(buf.String()))
+	}
 }
 
 // parseDSNDatabase extracts the database name from a DSN of the form:
