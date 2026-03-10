@@ -1,6 +1,6 @@
 # Hostplane — Context Summary
 
-> **Last updated: 2026-02-24** | `go build` ✅
+> **Last updated: 2026-03-04** | `go build` ✅ | branch: `feat-backup`
 
 ## What This Is
 
@@ -57,26 +57,34 @@ BASE_DOMAIN=cowsaidmoo.tech
 APP_SERVER_IP=***REMOVED***
 DOCKER_NETWORK=wp_backend
 WP_DSN=control:***REMOVED***@tcp(***REMOVED***:3306)/
+R2_ACCOUNT_ID=<cloudflare-account-id>
+R2_ACCESS_KEY_ID=<r2-key-id>
+R2_SECRET_ACCESS_KEY=<r2-secret>
+R2_BUCKET=hostplane-backups
+REQUIRE_BACKUP_BEFORE_DESTROY=true
 ```
 
 ---
 
 ## Source Files
 
-| File                    | Role                                                       |
-| ----------------------- | ---------------------------------------------------------- |
-| `main.go`               | wires everything, starts worker + HTTP server              |
-| `api.go`                | HTTP handlers (Gin)                                        |
-| `config.go`             | `LoadConfig()` from env                                    |
-| `db.go`                 | control-plane DB (jobs, sites)                             |
-| `naming.go`             | all resource name functions — only place names are defined |
-| `lifecycle.go`          | `SiteStatus` enum + state machine + domain validation      |
-| `provisioner.go`        | 7-step WP site provision + rollback                        |
-| `destroyer.go`          | reverse of provision                                       |
-| `static_provisioner.go` | static site provision                                      |
-| `worker.go`             | job poll loop                                              |
-| `caddy.go`              | `reloadCaddy()`, `ensureCaddyConfDir()`                    |
-| `tunnel.go`             | `TunnelManager` (custom domain routing)                    |
+| File                    | Role                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `main.go`               | wires everything, starts worker + HTTP server                                  |
+| `api.go`                | HTTP handlers (Gin)                                                            |
+| `config.go`             | `LoadConfig()` from env                                                        |
+| `db.go`                 | control-plane DB (jobs, sites) + `MigrateSchema`, `UpdateLastBackupAt`         |
+| `naming.go`             | all resource name functions — only place names are defined                     |
+| `lifecycle.go`          | `SiteStatus` enum + state machine + domain validation                          |
+| `provisioner.go`        | 7-step WP site provision + rollback                                            |
+| `destroyer.go`          | reverse of provision; gates on `BackupSite` before any destructive step        |
+| `static_provisioner.go` | static site provision                                                          |
+| `worker.go`             | job poll loop                                                                  |
+| `caddy.go`              | `reloadCaddy()`, `ensureCaddyConfDir()`                                        |
+| `tunnel.go`             | `TunnelManager` (custom domain routing)                                        |
+| `backup.go`             | `R2Client` — Upload, List, DeleteOlderThan, Download, objectExists, helpers    |
+| `backupper.go`          | `Backupper` — per-site DB + volume backup and restore via ephemeral containers |
+| `backup_worker.go`      | `BackupWorker` — 24 h ticker, immediate first run, weekly cleanup              |
 
 ---
 
@@ -123,6 +131,15 @@ systemctl restart control-plane
 - **`cleanup.sh`** — clears dead/zombie sites, stuck/pending jobs, orphaned containers/volumes/Caddy snippets
 - **`config.sh`** — sets up `/root/.my-hosto.cnf`
 
+## R2 Bucket Layout (`hostplane-backups`)
+
+```
+databases/<site>/YYYY-MM-DD.sql.gz   ← daily user DB backups
+volumes/<site>/YYYY-MM-DD.tar.gz     ← daily user volume backups
+infra/controlplane/YYYY-MM-DDTHH:MM:SSZ.sql.gz  ← hourly controlplane DB
+infra/certs/YYYY-MM-DD.tar.gz        ← daily Docker TLS certs
+```
+
 ---
 
 ## Stale `.ai/` files (superseded, kept for git history only)
@@ -130,23 +147,6 @@ systemctl restart control-plane
 - `plan.md` — old architectural principles doc
 - `lifecycle-refactor.md` — 943-line audit from before nginx-sidecar architecture
 - `caddy-manual-provsioning.md` — old manual guide, replaced by `detailed_runbook.md`
-
-### P3 — Reconciliation loop
-
-12. **Implement `Reconciler` struct** — Background goroutine (separate tick from job worker, e.g. 60s).
-13. **Drift detection for ACTIVE sites** — Container running? Nginx config exists? Tunnel route present?
-14. **Orphan detection** — Containers/configs/routes without matching DB records.
-15. **Auto-repair for safe drifts** — Restart stopped containers, regenerate missing nginx configs.
-16. **Replace `health.sh`/`cleanup.sh`** functionality with reconciler + API endpoints.
-
-### P4 — Observability + Testing
-
-17. **Structured logging** — `slog` or `OpContext` wrapper with site/job/step/elapsed on every line.
-18. **State machine unit tests** — Exhaustive `CanTransitionTo()` coverage.
-19. **Rollback path tests** — Every partial failure scenario with mock providers.
-20. **Idempotency tests** — Call every provider method twice, assert identical outcome.
-21. **Integration tests** — Full lifecycle provision → domain → destroy with real Docker.
-22. **Cloudflare IP range validation** in `ValidateDomainDNS`.
 
 ---
 
