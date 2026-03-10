@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"net/http"
@@ -16,15 +17,16 @@ import (
 var validSite = regexp.MustCompile(`^[a-z0-9]+$`)
 
 type API struct {
-	db        *DB
-	cfg       Config
-	docker    *client.Client
-	tunnel    *TunnelManager
-	backupper *Backupper
+	db          *DB
+	cfg         Config
+	docker      *client.Client
+	tunnel      *TunnelManager
+	backupper   *Backupper
+	pgBackupper *PGBackupper // nil when POSTGRES_DSN or R2 not configured
 }
 
-func NewAPI(db *DB, cfg Config, docker *client.Client, tunnel *TunnelManager, backupper *Backupper) *API {
-	return &API{db: db, cfg: cfg, docker: docker, tunnel: tunnel, backupper: backupper}
+func NewAPI(db *DB, cfg Config, docker *client.Client, tunnel *TunnelManager, backupper *Backupper, pgBackupper *PGBackupper) *API {
+	return &API{db: db, cfg: cfg, docker: docker, tunnel: tunnel, backupper: backupper, pgBackupper: pgBackupper}
 }
 
 // POST /api/sites/:site/domain
@@ -351,6 +353,10 @@ func (a *API) RegisterRoutes(r *gin.Engine) {
 		v1.POST("/sites/:site/backup", a.handleBackupSite)
 		v1.GET("/sites/:site/backups", a.handleListBackups)
 		v1.POST("/sites/:site/restore/:date", a.handleRestoreSite)
+		// PostgreSQL backup endpoints
+		v1.POST("/pg/backup", a.handlePGBackup)
+		v1.GET("/pg/backups", a.handleListPGBackups)
+		v1.POST("/pg/restore/:date", a.handleRestorePG)
 	}
 }
 
@@ -824,6 +830,92 @@ func (a *API) handleRestoreSite(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"site": site, "date": date, "status": "restored"})
+}
+
+// POST /api/pg/backup
+//
+// Triggers an on-demand backup of the PostgreSQL "hosto" database.
+// Runs synchronously and returns once the backup is complete and in R2.
+func (a *API) handlePGBackup(c *gin.Context) {
+	if a.pgBackupper == nil || a.pgBackupper.r2 == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "pg backup not configured (R2 or POSTGRES_DSN missing)"})
+		return
+	}
+	if err := a.pgBackupper.BackupDatabase(context.Background()); err != nil {
+		log.Printf("[api] pg backup failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_, _, _, _, pgDB := parsePGDSN(a.cfg.PostgresDSN)
+	c.JSON(http.StatusOK, gin.H{"database": pgDB, "status": "backed_up", "date": dateStamp()})
+}
+
+// GET /api/pg/backups
+//
+// Lists all available PostgreSQL backup objects in R2 along with the last
+// recorded backup time from the control DB.
+func (a *API) handleListPGBackups(c *gin.Context) {
+	if a.pgBackupper == nil || a.pgBackupper.r2 == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "pg backup not configured (R2 or POSTGRES_DSN missing)"})
+		return
+	}
+	_, _, _, _, pgDB := parsePGDSN(a.cfg.PostgresDSN)
+	prefix := "postgres/" + pgDB + "/"
+
+	ctx := c.Request.Context()
+	entries, err := a.pgBackupper.r2.List(ctx, prefix)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot list pg backups: " + err.Error()})
+		return
+	}
+
+	lastAt, lastKey, _ := a.db.GetPGLastBackupAt(pgDB)
+
+	type backupItem struct {
+		Key          string    `json:"key"`
+		Date         string    `json:"date"`
+		SizeBytes    int64     `json:"size_bytes"`
+		LastModified time.Time `json:"last_modified"`
+	}
+	items := make([]backupItem, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, backupItem{
+			Key:          e.Key,
+			Date:         pgDateFromKey(e.Key),
+			SizeBytes:    e.Size,
+			LastModified: e.LastModified,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"database":        pgDB,
+		"backups":         items,
+		"last_backup_at":  lastAt,
+		"last_backup_key": lastKey,
+	})
+}
+
+// POST /api/pg/restore/:date
+//
+// Restores the PostgreSQL database from the backup taken on :date (YYYY-MM-DD).
+// Runs synchronously. The target database must already exist on the PG server.
+func (a *API) handleRestorePG(c *gin.Context) {
+	date := c.Param("date")
+	if a.pgBackupper == nil || a.pgBackupper.r2 == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "pg backup not configured (R2 or POSTGRES_DSN missing)"})
+		return
+	}
+	if !dateRe.MatchString(date) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format — expected YYYY-MM-DD"})
+		return
+	}
+	if err := a.pgBackupper.RestoreDatabase(context.Background(), date); err != nil {
+		log.Printf("[api] pg restore failed date=%s: %v", date, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_, _, _, _, pgDB := parsePGDSN(a.cfg.PostgresDSN)
+	c.JSON(http.StatusOK, gin.H{"database": pgDB, "date": date, "status": "restored"})
 }
 
 // authMiddleware validates the X-API-Key header on every request

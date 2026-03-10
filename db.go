@@ -362,6 +362,58 @@ func (d *DB) EnsureDomainAvailable(domain, excludeSite string) error {
 	return nil
 }
 
+// MigratePGSchema creates the pg_backup_meta table used to track last
+// successful backup time and key for each PostgreSQL database.
+func (d *DB) MigratePGSchema() error {
+	_, err := d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS pg_backup_meta (
+			name            VARCHAR(64)   NOT NULL PRIMARY KEY,
+			last_backup_at  DATETIME      NULL DEFAULT NULL,
+			last_backup_key VARCHAR(512)  NULL DEFAULT NULL
+		)
+	`)
+	return err
+}
+
+// UpdatePGLastBackupAt records the time and R2 key of the most recent
+// successful backup for a PostgreSQL database.
+func (d *DB) UpdatePGLastBackupAt(name string, t time.Time, key string) error {
+	_, err := d.conn.Exec(`
+		INSERT INTO pg_backup_meta (name, last_backup_at, last_backup_key)
+		VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			last_backup_at  = VALUES(last_backup_at),
+			last_backup_key = VALUES(last_backup_key)
+	`, name, t.UTC(), key)
+	return err
+}
+
+// GetPGLastBackupAt returns the last backup time and R2 key for a PostgreSQL
+// database. Returns nil time and empty key if no backup has been recorded yet.
+func (d *DB) GetPGLastBackupAt(name string) (*time.Time, string, error) {
+	var lastAt sql.NullTime
+	var lastKey sql.NullString
+	err := d.conn.QueryRow(
+		`SELECT last_backup_at, last_backup_key FROM pg_backup_meta WHERE name=?`,
+		name,
+	).Scan(&lastAt, &lastKey)
+	if err == sql.ErrNoRows {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	var t *time.Time
+	if lastAt.Valid {
+		t = &lastAt.Time
+	}
+	key := ""
+	if lastKey.Valid {
+		key = lastKey.String
+	}
+	return t, key, nil
+}
+
 // ListCustomDomains returns all active custom domain values from the sites table.
 func (d *DB) ListCustomDomains() ([]string, error) {
 	rows, err := d.conn.Query(`

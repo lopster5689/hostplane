@@ -29,6 +29,9 @@ func main() {
 		// non-fatal — column may already exist on older MySQL versions that
 		// don't support IF NOT EXISTS on ALTER TABLE
 	}
+	if err := db.MigratePGSchema(); err != nil {
+		log.Printf("[main] pg schema migration warning: %v", err)
+	}
 
 	// ── Docker client (TLS to app-01) ────────────────────────────────
 	docker, err := client.NewClientWithOpts(
@@ -64,6 +67,7 @@ func main() {
 	provisioner := NewProvisioner(docker, cfg)
 	staticProvisioner := NewStaticProvisioner(docker, cfg)
 	backupper := NewBackupper(docker, cfg, r2, db)
+	pgBackupper := NewPGBackupper(docker, cfg, r2, db)
 	destroyer := NewDestroyer(docker, cfg, backupper)
 	worker := NewWorker(db, provisioner, destroyer, staticProvisioner, cfg)
 	go worker.Start()
@@ -76,6 +80,11 @@ func main() {
 
 		go NewInfraBackupWorker(NewInfraBackupper(docker, cfg, r2)).Start()
 		log.Println("[main] infra backup worker started")
+
+		if cfg.PostgresDSN != "" {
+			go NewPGBackupWorker(pgBackupper).Start()
+			log.Println("[main] pg backup worker started")
+		}
 	}
 
 	// ── HTTP API ─────────────────────────────────────────────────────
@@ -84,7 +93,7 @@ func main() {
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 
-	api := NewAPI(db, cfg, docker, tunnel, backupper)
+	api := NewAPI(db, cfg, docker, tunnel, backupper, pgBackupper)
 	api.RegisterRoutes(router)
 
 	srv := &http.Server{

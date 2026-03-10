@@ -45,6 +45,9 @@ type Config struct {
 	R2SecretAccessKey string
 	R2Bucket          string
 
+	// PostgreSQL backup (hosto DB on ***REMOVED***)
+	PostgresDSN string // postgres://user:pass@host:port/dbname
+
 	// RequireBackupBeforeDestroy gates destroy jobs on a successful pre-destroy
 	// backup. Defaults to true. Set REQUIRE_BACKUP_BEFORE_DESTROY=false to
 	// skip during development / debugging when R2 is not yet configured.
@@ -76,6 +79,7 @@ func LoadConfig() Config {
 		R2SecretAccessKey:          getEnv("R2_SECRET_ACCESS_KEY", ""),
 		R2Bucket:                   getEnv("R2_BUCKET", "hostplane-backups"),
 		RequireBackupBeforeDestroy: getEnvBool("REQUIRE_BACKUP_BEFORE_DESTROY", true),
+		PostgresDSN:                getEnv("POSTGRES_DSN", ""),
 	}
 }
 
