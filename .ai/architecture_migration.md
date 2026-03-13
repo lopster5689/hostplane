@@ -38,6 +38,12 @@ Customer browser
 
 api.cowsaidmoo.tech
     → Cloudflare → VPS → WireGuard → Caddy → control-01 (LXC on Proxmox)
+
+External product services (separate from Hostplane runtime):
+    ***REMOVED*** (droplet)
+        → frontend container (customer dashboard UI)
+        → backend container (customer API/business logic)
+        → postgres container (hosto DB: user + site records)
 ```
 
 ### Per-site container stack
@@ -185,6 +191,27 @@ DB_ROOT_PASSWORD=***REMOVED***
 | **php\_<site>**   | WordPress PHP-FPM, owns the site's files and database connection       |
 | **state-01**      | MariaDB — one database per site                                        |
 | **control-01**    | Go control plane binary — provisions/destroys sites via Docker API     |
+| *****REMOVED***** | Product droplet: frontend + backend + PostgreSQL containers            |
+
+---
+
+## Current Runtime Limits (Implemented)
+
+Per-site WordPress container limits are currently enforced in provisioning code:
+
+| Container      | Memory | CPU      | PID limit |
+| -------------- | ------ | -------- | --------- |
+| `php_<site>`   | 512MiB | 1.0 vCPU | 100       |
+| `nginx_<site>` | 128MiB | 0.5 vCPU | 50        |
+
+These are configured via Docker `HostConfig.Resources` when containers are created.
+
+What is still missing from architecture:
+
+- no per-plan/per-tenant variable limits
+- no explicit global capacity guardrail (max site count per app-01)
+- no admission control based on current host pressure
+- static-site path has no equivalent resource-limits policy documented
 
 ---
 
@@ -207,3 +234,7 @@ DB_ROOT_PASSWORD=***REMOVED***
 - [ ] Static site support (non-WordPress) — nginx sidecar serves from its own volume
 - [ ] HTTPS health check endpoint per site
 - [ ] Remove old cloudflared config once confirmed fully decommissioned
+- [ ] Define capacity model for app-01 (max sites from CPU/RAM/PID budget)
+- [ ] Add per-plan resource profiles (small/medium/large) for php/nginx limits
+- [ ] Add admission control: reject/shed new provisions when host headroom is below threshold
+- [ ] Decide whether Hostplane should also orchestrate lifecycle/backup for ***REMOVED*** frontend/backend containers

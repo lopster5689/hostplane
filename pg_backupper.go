@@ -64,8 +64,8 @@ func (b *PGBackupper) BackupDatabase(ctx context.Context) error {
 				"-p", pgPort,
 				"-U", pgUser,
 				"-d", pgDB,
-				"-F", "p",        // plain SQL — directly pipeable to psql for restore
-				"--no-password",  // password supplied via PGPASSWORD env var
+				"-F", "p", // plain SQL — directly pipeable to psql for restore
+				"--no-password", // password supplied via PGPASSWORD env var
 			},
 			Env:          []string{"PGPASSWORD=" + pgPass},
 			AttachStdout: true,

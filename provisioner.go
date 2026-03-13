@@ -89,6 +89,11 @@ func (p *Provisioner) Run(site string) error {
 	}
 	phpCreated = true
 
+	// Step 3b: Inject PHP upload limits into the running container
+	if err := p.writePHPUploadsConfig(phpName); err != nil {
+		return rollback(fmt.Errorf("writePHPUploadsConfig: %w", err))
+	}
+
 	// Step 4: Start nginx sidecar (mounts same volume, serves static + proxies PHP)
 	if err := p.createNginxContainer(nginxName, volName); err != nil {
 		return rollback(fmt.Errorf("createNginxContainer: %w", err))
@@ -346,6 +351,8 @@ func (p *Provisioner) writeNginxConfigWithDomains(nginxName, phpName, defaultDom
 
     server_name %s;
 
+    client_max_body_size 500M;
+
     location / {
         try_files $uri $uri/ /index.php?$args;
     }
@@ -389,6 +396,29 @@ func (p *Provisioner) writeNginxConfigWithDomains(nginxName, phpName, defaultDom
 		return fmt.Errorf("nginx reload exec create: %w", err)
 	}
 	return p.docker.ContainerExecStart(ctx, execResp.ID, types.ExecStartCheck{})
+}
+
+// writePHPUploadsConfig injects a custom uploads.ini into the running PHP-FPM
+// container to raise PHP upload limits from the stock 2 MB default.
+func (p *Provisioner) writePHPUploadsConfig(phpName string) error {
+	conf := []byte("upload_max_filesize = 500M\npost_max_size = 500M\nmemory_limit = 512M\n")
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	tw.WriteHeader(&tar.Header{
+		Name:    "uploads.ini",
+		Mode:    0644,
+		Size:    int64(len(conf)),
+		ModTime: time.Now(),
+	})
+	tw.Write(conf)
+	tw.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	return p.docker.CopyToContainer(ctx, phpName,
+		"/usr/local/etc/php/conf.d/", &buf, types.CopyToContainerOptions{})
 }
 
 // updateWordPressURLs sets siteurl and home in wp_options so WordPress serves
