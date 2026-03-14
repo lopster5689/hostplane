@@ -113,7 +113,7 @@ func (b *Backupper) BackupDatabase(site string) error {
 
 	createResp, err := b.docker.ContainerCreate(ctx,
 		&container.Config{
-			Image: "mysql:8",
+			Image: "mariadb:10",
 			Cmd: []string{
 				"mysqldump",
 				"-h", dbHost,
@@ -385,7 +385,7 @@ func (b *Backupper) RestoreDatabase(ctx context.Context, site, date string) erro
 
 	createResp, err := b.docker.ContainerCreate(ctx,
 		&container.Config{
-			Image: "mysql:8",
+			Image: "mariadb:10",
 			Cmd: []string{
 				"mysql",
 				"-h", dbHost,
