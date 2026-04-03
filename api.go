@@ -554,8 +554,8 @@ func (a *API) handleDeleteSite(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
 		return
 	}
-	if existing.Status != "DESTROYED" {
-		c.JSON(http.StatusConflict, gin.H{"error": "site must be DESTROYED before hard delete"})
+	if existing.Status != "DESTROYED" && existing.Status != "CREATED" && existing.Status != "FAILED" {
+		c.JSON(http.StatusConflict, gin.H{"error": "site must be DESTROYED, CREATED, or FAILED before hard delete"})
 		return
 	}
 
