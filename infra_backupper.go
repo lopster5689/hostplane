@@ -67,7 +67,7 @@ func (b *InfraBackupper) BackupControlplaneDB(ctx context.Context) error {
 
 	createResp, err := b.docker.ContainerCreate(ctx,
 		&container.Config{
-			Image: "mysql:8",
+			Image: "mariadb:10",
 			Cmd: []string{
 				"mysqldump",
 				"-h", dbHost,
@@ -76,7 +76,6 @@ func (b *InfraBackupper) BackupControlplaneDB(ctx context.Context) error {
 				fmt.Sprintf("-p%s", dbPass),
 				"--single-transaction",
 				"--quick",
-				"--set-gtid-purged=OFF",
 				dbName,
 			},
 			AttachStdout: true,
