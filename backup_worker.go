@@ -34,11 +34,9 @@ func (bw *BackupWorker) Start() {
 		log.Printf("[backup-worker] daily backup run #%d starting", day)
 		bw.backupper.BackupAll()
 
-		// Weekly cleanup — purge backups older than 30 days
-		if day%7 == 0 {
-			log.Printf("[backup-worker] running weekly cleanup (>30 days)")
-			bw.runCleanup()
-		}
+		// Daily cleanup — purge backups older than 3 days
+		log.Printf("[backup-worker] running cleanup (>3 days)")
+		bw.runCleanup()
 	}
 }
 
@@ -46,10 +44,10 @@ func (bw *BackupWorker) runCleanup() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	if err := bw.backupper.r2.DeleteOlderThan(ctx, "databases/", 30); err != nil {
+	if err := bw.backupper.r2.DeleteOlderThan(ctx, "databases/", 3); err != nil {
 		log.Printf("[backup-worker] cleanup databases/: %v", err)
 	}
-	if err := bw.backupper.r2.DeleteOlderThan(ctx, "volumes/", 30); err != nil {
+	if err := bw.backupper.r2.DeleteOlderThan(ctx, "volumes/", 3); err != nil {
 		log.Printf("[backup-worker] cleanup volumes/: %v", err)
 	}
 }
