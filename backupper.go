@@ -122,7 +122,6 @@ func (b *Backupper) BackupDatabase(site string) error {
 				fmt.Sprintf("-p%s", dbPass),
 				"--single-transaction", // consistent snapshot for InnoDB (WordPress default)
 				"--quick",
-				"--set-gtid-purged=OFF", // avoid GTID errors on replica-less setups
 				dbName,
 			},
 			AttachStdout: true,
