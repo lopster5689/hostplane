@@ -271,6 +271,10 @@ func (a *API) handleStaticProvision(c *gin.Context) {
 	}
 
 	userID := c.PostForm("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id is required"})
+		return
+	}
 
 	// Reject if site already has an active job
 	active, err := a.db.HasActiveJob(site)
@@ -472,11 +476,11 @@ func (a *API) handleCertRetry(c *gin.Context) {
 func (a *API) handleProvision(c *gin.Context) {
 	var req struct {
 		Site     string `json:"site" binding:"required"`
-		UserID   string `json:"user_id"`
+		UserID   string `json:"user_id" binding:"required"`
 		SiteType string `json:"site_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "site is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "site and user_id are required"})
 		return
 	}
 
