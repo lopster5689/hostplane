@@ -359,6 +359,7 @@ func (a *API) RegisterRoutes(r *gin.Engine) {
 		v1.POST("/sites/:site/backup", a.handleBackupSite)
 		v1.GET("/sites/:site/backups", a.handleListBackups)
 		v1.POST("/sites/:site/restore/:date", a.handleRestoreSite)
+		v1.DELETE("/sites/:site/backups/:date", a.handleDeleteBackup)
 		// PostgreSQL backup endpoints
 		v1.POST("/pg/backup", a.handlePGBackup)
 		v1.GET("/pg/backups", a.handleListPGBackups)
@@ -839,6 +840,55 @@ func (a *API) handleRestoreSite(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"site": site, "date": date, "status": "restored"})
+}
+
+// DELETE /api/sites/:site/backups/:date
+//
+// Deletes the database and volume backup objects from R2 for the given site
+// and date. If only one of the two exists, it is still deleted.
+func (a *API) handleDeleteBackup(c *gin.Context) {
+	site := c.Param("site")
+	date := c.Param("date")
+
+	if a.backupper.r2 == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "backup not configured (R2 credentials missing)"})
+		return
+	}
+	if !dateRe.MatchString(date) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date format — expected YYYY-MM-DD"})
+		return
+	}
+	if _, err := a.db.GetSite(site); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	var deleted []string
+	var errors []string
+
+	dbKey := keyForDB(site, date)
+	volKey := keyForVolume(site, date)
+
+	if err := a.backupper.r2.deleteObject(ctx, dbKey); err != nil {
+		errors = append(errors, "db: "+err.Error())
+	} else {
+		deleted = append(deleted, dbKey)
+	}
+
+	if err := a.backupper.r2.deleteObject(ctx, volKey); err != nil {
+		errors = append(errors, "volume: "+err.Error())
+	} else {
+		deleted = append(deleted, volKey)
+	}
+
+	if len(deleted) == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete backups", "details": errors})
+		return
+	}
+
+	log.Printf("[api] deleted backups site=%s date=%s keys=%v", site, date, deleted)
+	c.JSON(http.StatusOK, gin.H{"site": site, "date": date, "deleted": deleted, "errors": errors})
 }
 
 // POST /api/pg/backup
