@@ -213,7 +213,7 @@ func zipToTar(zipPath, sitePrefix string) (io.Reader, error) {
 func (p *StaticProvisioner) writeCaddyConfig(site, defaultDomain string, customDomain ...string) error {
 	hosts := defaultDomain
 	if len(customDomain) > 0 && customDomain[0] != "" {
-		hosts = defaultDomain + ", " + customDomain[0]
+		hosts = defaultDomain + ", " + customDomain[0] + ", www." + customDomain[0]
 	}
 
 	conf := fmt.Sprintf(`%s {

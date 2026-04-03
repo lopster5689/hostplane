@@ -26,6 +26,7 @@ type Site struct {
 	Domain       string
 	Status       string
 	JobID        string
+	UserID       string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	CustomDomain string
@@ -100,6 +101,13 @@ func (d *DB) MigrateSchema() error {
 		ALTER TABLE sites
 		ADD COLUMN IF NOT EXISTS last_backup_at DATETIME NULL DEFAULT NULL
 	`)
+	if err != nil {
+		return err
+	}
+	_, err = d.conn.Exec(`
+		ALTER TABLE sites
+		ADD COLUMN IF NOT EXISTS user_id VARCHAR(36) NULL DEFAULT NULL
+	`)
 	return err
 }
 
@@ -114,9 +122,9 @@ func (d *DB) GetSite(site string) (*Site, error) {
 	var s Site
 	var lastBackup sql.NullTime
 	err := d.conn.QueryRow(`
-        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), created_at, updated_at, last_backup_at
+        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), COALESCE(user_id,''), created_at, updated_at, last_backup_at
         FROM sites WHERE site=?
-    `, site).Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.CreatedAt, &s.UpdatedAt, &lastBackup)
+    `, site).Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.UserID, &s.CreatedAt, &s.UpdatedAt, &lastBackup)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +136,7 @@ func (d *DB) GetSite(site string) (*Site, error) {
 
 func (d *DB) ListSites() ([]Site, error) {
 	rows, err := d.conn.Query(`
-        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), created_at, updated_at, last_backup_at
+        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), COALESCE(user_id,''), created_at, updated_at, last_backup_at
         FROM sites ORDER BY created_at DESC
     `)
 	if err != nil {
@@ -140,7 +148,7 @@ func (d *DB) ListSites() ([]Site, error) {
 	for rows.Next() {
 		var s Site
 		var lastBackup sql.NullTime
-		if err := rows.Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.CreatedAt, &s.UpdatedAt, &lastBackup); err != nil {
+		if err := rows.Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.UserID, &s.CreatedAt, &s.UpdatedAt, &lastBackup); err != nil {
 			return nil, err
 		}
 		if lastBackup.Valid {
@@ -193,12 +201,12 @@ func (d *DB) InsertJob(id string, jobType JobType, site string) error {
 }
 
 // InsertSite creates or updates the site record
-func (d *DB) UpsertSite(site, domain, status, jobID string) error {
+func (d *DB) UpsertSite(site, domain, status, jobID, userID string) error {
 	_, err := d.conn.Exec(`
-        INSERT INTO sites (site, domain, status, job_id)
-        VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE status=VALUES(status), job_id=VALUES(job_id), updated_at=NOW()
-    `, site, domain, status, jobID)
+        INSERT INTO sites (site, domain, status, job_id, user_id)
+        VALUES (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE status=VALUES(status), job_id=VALUES(job_id), user_id=VALUES(user_id), updated_at=NOW()
+    `, site, domain, status, jobID, userID)
 	return err
 }
 

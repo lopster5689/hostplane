@@ -270,6 +270,8 @@ func (a *API) handleStaticProvision(c *gin.Context) {
 		return
 	}
 
+	userID := c.PostForm("user_id")
+
 	// Reject if site already has an active job
 	active, err := a.db.HasActiveJob(site)
 	if err != nil {
@@ -313,7 +315,7 @@ func (a *API) handleStaticProvision(c *gin.Context) {
 		return
 	}
 
-	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID); err != nil {
+	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID, userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record site"})
 		return
 	}
@@ -469,7 +471,9 @@ func (a *API) handleCertRetry(c *gin.Context) {
 // POST /api/provision
 func (a *API) handleProvision(c *gin.Context) {
 	var req struct {
-		Site string `json:"site" binding:"required"`
+		Site     string `json:"site" binding:"required"`
+		UserID   string `json:"user_id"`
+		SiteType string `json:"site_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "site is required"})
@@ -513,7 +517,7 @@ func (a *API) handleProvision(c *gin.Context) {
 		return
 	}
 
-	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID); err != nil {
+	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID, req.UserID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record site"})
 		return
 	}
@@ -630,7 +634,7 @@ func (a *API) handleDestroy(c *gin.Context) {
 		return
 	}
 
-	if err := a.db.UpsertSite(site, existing.Domain, "DESTROYING", jobID); err != nil {
+	if err := a.db.UpsertSite(site, existing.Domain, "DESTROYING", jobID, existing.UserID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update site status"})
 		return
 	}
@@ -721,6 +725,7 @@ func (a *API) handleSiteStatus(c *gin.Context) {
 		"cert_status":    certStatus,
 		"warnings":       warnings,
 		"job_id":         s.JobID,
+		"user_id":        s.UserID,
 		"last_backup_at": s.LastBackupAt,
 		"created_at":     s.CreatedAt,
 		"updated_at":     s.UpdatedAt,

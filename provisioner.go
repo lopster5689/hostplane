@@ -245,7 +245,7 @@ func (p *Provisioner) createContainer(phpName, volumeName, dbName, dbUser, dbPas
 func (p *Provisioner) writeCaddyConfig(site, nginxName, defaultDomain string, customDomain ...string) error {
 	hosts := defaultDomain
 	if len(customDomain) > 0 && customDomain[0] != "" {
-		hosts = defaultDomain + ", " + customDomain[0]
+		hosts = defaultDomain + ", " + customDomain[0] + ", www." + customDomain[0]
 	}
 
 	conf := fmt.Sprintf("%s {\n    encode gzip\n    reverse_proxy %s:80\n}\n", hosts, nginxName)
@@ -340,7 +340,7 @@ func (p *Provisioner) writeNginxConfigWithDomains(nginxName, phpName, defaultDom
 	serverName := defaultDomain
 	httpHost := defaultDomain
 	if customDomain != "" {
-		serverName = defaultDomain + " " + customDomain
+		serverName = defaultDomain + " " + customDomain + " www." + customDomain
 		httpHost = "$host"
 	}
 
