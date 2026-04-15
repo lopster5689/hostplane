@@ -205,11 +205,9 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		if old == "" || new == "" {
 			return nil, fmt.Errorf("old and new are required")
 		}
-		dryRun := params["dry_run"]
-		cmd := []string{"wp", "search-replace", old, new, "--allow-root"}
-		if dryRun == "true" {
-			cmd = append(cmd, "--dry-run")
-		}
+		// MVP: search_replace is dry-run only (read-only preview of what would change).
+		// Live execution requires pre-backup integration (V2).
+		cmd := []string{"wp", "search-replace", old, new, "--dry-run", "--allow-root"}
 		return cmd, nil
 
 	case "media_import":
@@ -219,6 +217,18 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		}
 		if !strings.HasPrefix(url, "https://") {
 			return nil, fmt.Errorf("url must start with https://")
+		}
+		// Block SSRF to internal networks
+		for _, blocked := range []string{
+			"://127.", "://10.", "://192.168.", "://172.16.", "://172.17.",
+			"://172.18.", "://172.19.", "://172.20.", "://172.21.", "://172.22.",
+			"://172.23.", "://172.24.", "://172.25.", "://172.26.", "://172.27.",
+			"://172.28.", "://172.29.", "://172.30.", "://172.31.",
+			"://169.254.", "://[::1]", "://localhost",
+		} {
+			if strings.Contains(url, blocked) {
+				return nil, fmt.Errorf("url must point to a public host")
+			}
 		}
 		cmd := []string{"wp", "media", "import", url, "--allow-root"}
 		if title := params["title"]; title != "" {
