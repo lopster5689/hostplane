@@ -5,14 +5,19 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
 )
+
+// maxOutputBytes caps WP-CLI output to prevent OOM on large results.
+const maxOutputBytes = 1 << 20 // 1MB
 
 // WPExecRequest is the structured request body for the wp-exec endpoint.
 // Commands are never passed as raw strings — the control plane constructs
@@ -30,7 +35,7 @@ type WPExecResponse struct {
 	ExitCode int    `json:"exit_code"`
 }
 
-// safeOptionKeys restricts which wp_options can be modified via the agent.
+// safeOptionKeys restricts which wp_options can be read or modified via the agent.
 // Dangerous keys (siteurl, home, admin_email, etc.) are excluded.
 var safeOptionKeys = map[string]bool{
 	"blogname":        true,
@@ -42,6 +47,15 @@ var safeOptionKeys = map[string]bool{
 	"show_on_front":   true,
 	"page_on_front":   true,
 	"page_for_posts":  true,
+}
+
+// validatePostID checks that the id param is a positive integer.
+func validatePostID(id string) error {
+	n, err := strconv.Atoi(id)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("id must be a positive integer")
+	}
+	return nil
 }
 
 // pluginSlugRe validates wordpress.org plugin slugs (lowercase alphanumeric + hyphens).
@@ -69,6 +83,9 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		key := params["key"]
 		if key == "" {
 			return nil, fmt.Errorf("key is required")
+		}
+		if !safeOptionKeys[key] {
+			return nil, fmt.Errorf("option key %q is not allowed", key)
 		}
 		return []string{"wp", "option", "get", key, "--format=json", "--allow-root"}, nil
 
@@ -105,12 +122,18 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		if id == "" {
 			return nil, fmt.Errorf("id is required")
 		}
+		if err := validatePostID(id); err != nil {
+			return nil, err
+		}
 		return []string{"wp", "post", "get", id, "--format=json", "--allow-root"}, nil
 
 	case "update_post":
 		id := params["id"]
 		if id == "" {
 			return nil, fmt.Errorf("id is required")
+		}
+		if err := validatePostID(id); err != nil {
+			return nil, err
 		}
 		field := params["field"]
 		value := params["value"]
@@ -245,6 +268,7 @@ func (a *API) handleWPExec(c *gin.Context) {
 	// Execute inside the PHP container with a 30s timeout
 	output, exitCode, err := a.execWPCLI(site, cmd)
 	if err != nil {
+		log.Printf("wp-exec error for site %s tool %s: %v", site, req.Tool, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -286,13 +310,18 @@ func (a *API) execWPCLI(site string, cmd []string) (string, int, error) {
 	}
 	defer attachResp.Close()
 
-	// Read output, stripping Docker mux headers
+	// Read output, stripping Docker mux headers (capped at 1MB)
 	raw := stripDockerMux(attachResp.Reader)
+	limited := io.LimitReader(raw, int64(maxOutputBytes))
 	var buf strings.Builder
-	if _, err := io.Copy(&buf, raw); err != nil {
+	n, err := io.Copy(&buf, limited)
+	if err != nil {
 		return "", -1, fmt.Errorf("read output: %w", err)
 	}
 	output := strings.TrimSpace(buf.String())
+	if n >= int64(maxOutputBytes) {
+		output += "\n[output truncated at 1MB]"
+	}
 
 	// Check exit code
 	inspect, err := a.docker.ContainerExecInspect(ctx, execResp.ID)
