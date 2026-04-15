@@ -201,7 +201,7 @@ func (p *Provisioner) createContainer(phpName, volumeName, dbName, dbUser, dbPas
 	resp, err := p.docker.ContainerCreate(
 		ctx,
 		&container.Config{
-			Image: "wordpress:php8.2-fpm",
+			Image: p.cfg.WordPressImage,
 			Env: []string{
 				"WORDPRESS_DB_HOST=" + p.cfg.DBHost(),
 				"WORDPRESS_DB_USER=" + dbUser,

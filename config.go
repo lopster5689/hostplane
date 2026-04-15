@@ -24,6 +24,9 @@ type Config struct {
 	CaddyContainer    string // Docker container name for Caddy
 	CaddyStaticVolume string // shared Docker volume name mounted at /srv/sites in Caddy
 
+	// WordPress
+	WordPressImage string // Docker image for PHP containers (default: hostplane/wordpress:php8.2-fpm)
+
 	// Domain
 	BaseDomain string
 
@@ -65,6 +68,7 @@ func LoadConfig() Config {
 		CaddyConfDir:               getEnv("CADDY_CONF_DIR", "/etc/caddy/sites"),
 		CaddyContainer:             getEnv("CADDY_CONTAINER", "caddy"),
 		CaddyStaticVolume:          getEnv("CADDY_STATIC_VOLUME", "caddy_static_sites"),
+		WordPressImage:             getEnv("WORDPRESS_IMAGE", "hostplane/wordpress:php8.2-fpm"),
 		BaseDomain:                 getEnv("BASE_DOMAIN", "hosto.com"),
 		AppServerIP:                getEnv("APP_SERVER_IP", "***REMOVED***"),
 		PublicIP:                   getEnv("PUBLIC_IP", "***REMOVED***"),
