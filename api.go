@@ -360,6 +360,9 @@ func (a *API) RegisterRoutes(r *gin.Engine) {
 		v1.GET("/sites/:site/backups", a.handleListBackups)
 		v1.POST("/sites/:site/restore/:date", a.handleRestoreSite)
 		v1.DELETE("/sites/:site/backups/:date", a.handleDeleteBackup)
+		// WP-CLI execution (structured tool calls from AI agent)
+		v1.POST("/sites/:site/wp-exec", a.handleWPExec)
+
 		// PostgreSQL backup endpoints
 		v1.POST("/pg/backup", a.handlePGBackup)
 		v1.GET("/pg/backups", a.handleListPGBackups)
