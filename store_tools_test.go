@@ -30,15 +30,19 @@ func w1benchBrokenState() storeState {
 
 func goodStoreState() storeState {
 	return storeState{
-		Currency:    "INR",
-		ShowOnFront: "page",
-		FrontID:     17,
-		FrontStatus: "publish",
-		DefaultPost: false,
-		DefaultPage: false,
-		WC:          true,
-		ShopPageID:  5,
-		ShopStatus:  "publish",
+		Currency:        "INR",
+		ShowOnFront:     "page",
+		FrontID:         17,
+		FrontStatus:     "publish",
+		DefaultPost:     false,
+		DefaultPage:     false,
+		WC:              true,
+		ShopPageID:      5,
+		ShopStatus:      "publish",
+		PaymentsEnabled: 1,
+		ShippingMethods: 1,
+		PrivacyPage:     true,
+		TermsPage:       true,
 		Products: []storeProduct{
 			{Name: "Butter Croissant", Price: "120"},
 			{Name: "Sourdough Loaf", Price: "250.00"},
@@ -61,11 +65,14 @@ func TestStoreChecksFailsTheRealW1benchDefects(t *testing.T) {
 	fails := storeChecks(w1benchBrokenState(), "INR", specProducts())
 	joined := strings.Join(fails, "\n")
 	for _, want := range []string{
-		"currency_mismatch",     // $ instead of ₹
-		"product_price_wrong",   // 1.20 instead of 120 (÷100)
-		"menu_link_invalid",     // http://Shop
-		"default_post_present",  // Hello world! not cleaned
-		"homepage_not_a_page",   // storefront fell back to the blog
+		"currency_mismatch",         // $ instead of ₹
+		"product_price_wrong",       // 1.20 instead of 120 (÷100)
+		"menu_link_invalid",         // http://Shop
+		"default_post_present",      // Hello world! not cleaned
+		"homepage_not_a_page",       // storefront fell back to the blog
+		"no_payment_method_enabled", // funnel floor (F2)
+		"no_shipping_method",
+		"legal_pages_missing",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected failure %q missing from:\n%s", want, joined)
@@ -150,12 +157,12 @@ func TestValidateHomeSections(t *testing.T) {
 		t.Fatalf("valid sections rejected: %v", err)
 	}
 	bad := []string{
-		`[]`, // empty
-		`[{"type":"marquee"}]`,                                  // unknown type
-		`[{"type":"hero_image","headline":"x"}]`,                // hero without image
-		`[{"type":"story","title":"x"}]`,                        // story without text
-		`[{"type":"gallery","image_ids":[1]}]`,                  // gallery too small
-		`[{"type":"offer_banner"}]`,                             // banner without text
+		`[]`,                                     // empty
+		`[{"type":"marquee"}]`,                   // unknown type
+		`[{"type":"hero_image","headline":"x"}]`, // hero without image
+		`[{"type":"story","title":"x"}]`,         // story without text
+		`[{"type":"gallery","image_ids":[1]}]`,   // gallery too small
+		`[{"type":"offer_banner"}]`,              // banner without text
 		`not json`,
 	}
 	for _, b := range bad {

@@ -84,9 +84,59 @@ func (a *API) handlePrepareStore(site string, params map[string]string) (string,
 			WC_Install::create_pages();
 			$done[] = 'woocommerce pages ensured';
 		}
+		// Funnel floor (design-depth F1): a store a stranger can actually buy
+		// from. Country from currency; COD enabled as the deterministic
+		// baseline gateway (owner upgrades to Razorpay/UPI later); one
+		// everywhere shipping method; legal pages checkout links point at.
+		update_option('woocommerce_default_country', '` + currencyCountry(currency) + `');
+		update_option('woocommerce_default_customer_address', 'base');
+		$done[] = 'store country=` + currencyCountry(currency) + `';
+		if (class_exists('WooCommerce')) {
+			$cod = get_option('woocommerce_cod_settings', array());
+			if (!is_array($cod)) { $cod = array(); }
+			if (!isset($cod['enabled']) || $cod['enabled'] !== 'yes') {
+				$cod = array_merge(array('title' => 'Cash on delivery', 'description' => 'Pay with cash upon delivery.'), $cod);
+				$cod['enabled'] = 'yes';
+				update_option('woocommerce_cod_settings', $cod);
+				$done[] = 'cash-on-delivery enabled';
+			}
+			if (class_exists('WC_Shipping_Zone')) {
+				$rest = new WC_Shipping_Zone(0);
+				if (count($rest->get_shipping_methods()) === 0) {
+					$rest->add_shipping_method('flat_rate');
+					$done[] = 'shipping method added (flat rate, everywhere)';
+				}
+			}
+		}
+		$priv = (int) get_option('wp_page_for_privacy_policy');
+		if ($priv <= 0 || get_post_status($priv) !== 'publish') {
+			$pid = wp_insert_post(array('post_title' => 'Privacy Policy', 'post_type' => 'page', 'post_status' => 'publish',
+				'post_content' => 'We collect only the information needed to process your order (name, address, contact). We never sell your data. Contact us to review or delete your information.'));
+			if ($pid && !is_wp_error($pid)) { update_option('wp_page_for_privacy_policy', $pid); $done[] = 'privacy policy page created'; }
+		}
+		$terms = (int) get_option('woocommerce_terms_page_id');
+		if ($terms <= 0 || get_post_status($terms) !== 'publish') {
+			$tid = wp_insert_post(array('post_title' => 'Terms and Conditions', 'post_type' => 'page', 'post_status' => 'publish',
+				'post_content' => 'Orders are confirmed on payment or on delivery for cash orders. Contact us for cancellations, returns and refunds; we will make it right.'));
+			if ($tid && !is_wp_error($tid)) { update_option('woocommerce_terms_page_id', $tid); $done[] = 'terms page created'; }
+		}
 		echo 'prepare_store: ' . implode('; ', $done);
 	`
 	return a.execWPCLI(site, []string{"sh", "-c", "wp eval " + shellQuote(phpCode) + " --allow-root 2>&1"})
+}
+
+// currencyCountry maps a store currency to the WooCommerce base country the
+// funnel floor sets (checkout defaults, tax/shipping logic). Deliberately the
+// obvious mapping; owners with multi-country stores adjust in admin.
+func currencyCountry(currency string) string {
+	m := map[string]string{
+		"INR": "IN", "USD": "US", "EUR": "DE", "GBP": "GB", "AUD": "AU",
+		"CAD": "CA", "SGD": "SG", "AED": "AE", "JPY": "JP", "NZD": "NZ",
+	}
+	if c, ok := m[currency]; ok {
+		return c
+	}
+	return "US"
 }
 
 // storeStatePHP collects the acceptance facts in one wp-eval round trip.
@@ -122,6 +172,22 @@ const storeStatePHP = `
 			$out['shop_path'] = wp_make_link_relative(get_permalink($shop));
 		}
 	}
+	$out['payments_enabled'] = 0;
+	$out['shipping_methods'] = 0;
+	if ($out['wc'] && function_exists('WC') && WC()->payment_gateways()) {
+		$out['payments_enabled'] = count(WC()->payment_gateways()->get_available_payment_gateways());
+		if (class_exists('WC_Shipping_Zones')) {
+			$n = 0;
+			foreach (WC_Shipping_Zones::get_zones() as $z) { $n += count($z['shipping_methods']); }
+			$rest = new WC_Shipping_Zone(0);
+			$n += count($rest->get_shipping_methods());
+			$out['shipping_methods'] = $n;
+		}
+	}
+	$priv = (int) get_option('wp_page_for_privacy_policy');
+	$out['privacy_page'] = $priv > 0 && get_post_status($priv) === 'publish';
+	$termsp = (int) get_option('woocommerce_terms_page_id');
+	$out['terms_page'] = $termsp > 0 && get_post_status($termsp) === 'publish';
 	$out['menu_items'] = array();
 	foreach (wp_get_nav_menus() as $menu) {
 		$items = wp_get_nav_menu_items($menu->term_id);
@@ -135,23 +201,27 @@ const storeStatePHP = `
 
 // storeState is the parsed acceptance snapshot.
 type storeState struct {
-	Currency    string          `json:"currency"`
-	ShowOnFront string          `json:"show_on_front"`
-	FrontID     int             `json:"front_id"`
-	FrontStatus string          `json:"front_status"`
-	Permalinks  string          `json:"permalinks"`
-	DefaultPost bool            `json:"default_post"`
-	DefaultPage bool            `json:"default_page"`
-	WC           bool   `json:"wc"`
-	OurTheme     bool   `json:"our_theme"`
-	HomeSections string `json:"home_sections"`
-	StyleCSS     string `json:"style_css"`
-	ShopPageID   int    `json:"shop_page"`
-	ShopStatus  string          `json:"shop_status"`
-	ShopPath    string          `json:"shop_path"`
-	ProductPath string          `json:"product_path"`
-	Products    []storeProduct  `json:"products"`
-	MenuItems   []storeMenuItem `json:"menu_items"`
+	Currency        string          `json:"currency"`
+	ShowOnFront     string          `json:"show_on_front"`
+	FrontID         int             `json:"front_id"`
+	FrontStatus     string          `json:"front_status"`
+	Permalinks      string          `json:"permalinks"`
+	DefaultPost     bool            `json:"default_post"`
+	DefaultPage     bool            `json:"default_page"`
+	WC              bool            `json:"wc"`
+	OurTheme        bool            `json:"our_theme"`
+	HomeSections    string          `json:"home_sections"`
+	StyleCSS        string          `json:"style_css"`
+	PaymentsEnabled int             `json:"payments_enabled"`
+	ShippingMethods int             `json:"shipping_methods"`
+	PrivacyPage     bool            `json:"privacy_page"`
+	TermsPage       bool            `json:"terms_page"`
+	ShopPageID      int             `json:"shop_page"`
+	ShopStatus      string          `json:"shop_status"`
+	ShopPath        string          `json:"shop_path"`
+	ProductPath     string          `json:"product_path"`
+	Products        []storeProduct  `json:"products"`
+	MenuItems       []storeMenuItem `json:"menu_items"`
 }
 
 type storeProduct struct {
@@ -200,8 +270,21 @@ func storeChecks(st storeState, expectCurrency string, expectProducts []storePro
 	}
 	if !st.WC {
 		fails = append(fails, "woocommerce_not_active")
-	} else if st.ShopPageID <= 0 || st.ShopStatus != "publish" {
-		fails = append(fails, "shop_page_missing_or_unpublished (run prepare_store)")
+	} else {
+		if st.ShopPageID <= 0 || st.ShopStatus != "publish" {
+			fails = append(fails, "shop_page_missing_or_unpublished (run prepare_store)")
+		}
+		// Funnel floor (F2): a store nobody can pay or get delivery from is
+		// not done, however good it looks. prepare_store fixes all three.
+		if st.PaymentsEnabled < 1 {
+			fails = append(fails, "no_payment_method_enabled (prepare_store enables cash-on-delivery as the baseline)")
+		}
+		if st.ShippingMethods < 1 {
+			fails = append(fails, "no_shipping_method (prepare_store adds a flat-rate everywhere zone)")
+		}
+		if !st.PrivacyPage || !st.TermsPage {
+			fails = append(fails, "legal_pages_missing (prepare_store creates Privacy Policy + Terms)")
+		}
 	}
 	for _, want := range expectProducts {
 		var got string
