@@ -103,6 +103,7 @@ const storeStatePHP = `
 	$sample = get_page_by_path('sample-page', OBJECT, 'page');
 	$out['default_page'] = $sample && $sample->post_status === 'publish';
 	$out['wc'] = class_exists('WooCommerce');
+	$out['our_theme'] = file_exists(get_stylesheet_directory() . '/.hostplane-scaffold');
 	$out['products'] = array();
 	$out['shop_page'] = 0; $out['shop_status'] = ''; $out['shop_path'] = ''; $out['product_path'] = '';
 	if ($out['wc']) {
@@ -139,6 +140,7 @@ type storeState struct {
 	DefaultPost bool            `json:"default_post"`
 	DefaultPage bool            `json:"default_page"`
 	WC          bool            `json:"wc"`
+	OurTheme    bool            `json:"our_theme"`
 	ShopPageID  int             `json:"shop_page"`
 	ShopStatus  string          `json:"shop_status"`
 	ShopPath    string          `json:"shop_path"`
@@ -267,12 +269,14 @@ func (a *API) handleVerifyStore(site string, params map[string]string) (string, 
 	if p := params["path"]; p != "" && p != "/" && verifyPagePathRe.MatchString(p) {
 		checks = append(checks, renderCheck{p, ""})
 	}
+	shopRenderPath := ""
 	if storeBuild && st.ShopPath != "" && verifyPagePathRe.MatchString(st.ShopPath) {
 		must := ""
 		if len(expectProducts) > 0 {
 			must = expectProducts[0].Name
 		}
 		checks = append(checks, renderCheck{st.ShopPath, must})
+		shopRenderPath = st.ShopPath
 	}
 	priceMarkerPath := ""
 	if storeBuild && st.ProductPath != "" && st.ProductPath != "/" && verifyPagePathRe.MatchString(st.ProductPath) {
@@ -296,6 +300,15 @@ func (a *API) handleVerifyStore(site string, params map[string]string) (string, 
 				continue
 			}
 			fails = append(fails, rc.path+": "+f)
+		}
+		// On OUR scaffolded themes the shop page must render the theme's
+		// styled grid, not WooCommerce's bare ul.products loop (which needs
+		// wc CSS the Tailwind preflight clobbers → the collapsed-grid bug).
+		// A model-written woocommerce.php shadowing archive-product.php is
+		// the known way this regresses; catch it mechanically.
+		if rc.path == shopRenderPath && st.OurTheme &&
+			strings.Contains(body, `<ul class="products`) && !strings.Contains(body, "grid-cols") {
+			fails = append(fails, rc.path+": shop_grid_unstyled (WooCommerce default loop is rendering — a woocommerce.php is likely shadowing the theme's archive-product.php grid; remove it)")
 		}
 		// The product page must show a price in the expected currency —
 		// this is the render-level half of the $-instead-of-₹ bug.

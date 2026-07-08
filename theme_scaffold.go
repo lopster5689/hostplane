@@ -400,17 +400,12 @@ file_put_contents($dir . "/front-page.php", <<<'FRONTPAGE'
 FRONTPAGE
 );
 
-// ═══════════════════════════════════════════════════════════════
-// woocommerce.php — Handles BOTH shop grid AND single products
-// ═══════════════════════════════════════════════════════════════
-file_put_contents($dir . "/woocommerce.php", <<<'WOO'
-<?php get_header(); ?>
-<main class="max-w-7xl mx-auto px-4 md:px-6 py-12">
-    <?php woocommerce_content(); ?>
-</main>
-<?php get_footer(); ?>
-WOO
-);
+// NOTE deliberately NO woocommerce.php: WooCommerce's template loader gives
+// woocommerce.php priority over archive-product.php, so shipping it would
+// shadow the styled Tailwind shop grid below with woocommerce_content()'s
+// wc-CSS-dependent loop (the collapsed /shop bug, found twice — 2026-07-08).
+// With add_theme_support('woocommerce') + explicit archive-product.php and
+// single-product.php, the loader uses those directly.
 
 // ═══════════════════════════════════════════════════════════════
 // page.php — Generic page template
@@ -561,6 +556,6 @@ file_put_contents($dir . "/index.php", <<<'INDEX'
 INDEX
 );
 
-echo "Theme '$name' created at themes/$slug with 10 template files + Tailwind CSS design system";
+echo "Theme '$name' created at themes/$slug with 9 template files + Tailwind CSS design system";
 `
 }

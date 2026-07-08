@@ -323,7 +323,13 @@ func (a *API) activationGuard(site, slug string) (string, error) {
 		if (!$theme->exists()) { echo "theme not found"; exit(0); } // let wp-cli produce its own error
 		$dir = $theme->get_stylesheet_directory();
 		$required = array("` + list + `");
-		if (class_exists("WooCommerce")) { $required[] = "woocommerce.php"; }
+		// WooCommerce routing needs EITHER woocommerce.php (legacy scaffolds)
+		// OR the explicit archive/single pair (current scaffolds — shipping
+		// woocommerce.php would shadow the styled archive grid).
+		if (class_exists("WooCommerce") && !file_exists($dir . "/woocommerce.php")) {
+			$required[] = "archive-product.php";
+			$required[] = "single-product.php";
+		}
 		$missing = array();
 		foreach ($required as $f) { if (!file_exists($dir . "/" . $f)) { $missing[] = $f; } }
 		// Stock/third-party themes ship their own complete structure — only guard
