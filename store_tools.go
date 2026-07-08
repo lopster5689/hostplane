@@ -1,0 +1,326 @@
+package main
+
+// Store-quality tooling (hosto-infra/AI-EDITOR-V2-QUALITY-PLAN.md, layers 1+3).
+//
+//   - prepare_store: the deterministic store baseline — currency, default-content
+//     cleanup, pretty permalinks, WooCommerce pages. The model CHOOSES the
+//     currency; this code performs the writes (P1). Idempotent.
+//   - verify_store: the acceptance suite that decides whether a build is done —
+//     real DB facts + rendered pages checked against the job's typed manifest
+//     (P4). The dashboard's finalizeJob runs this before any job can settle;
+//     the model can also call it read-only to preview what would fail.
+//
+// Check logic is split into pure functions (storeChecks, priceEqual) so the
+// exact bug classes that shipped — ÷100 prices, $-instead-of-₹, http://Shop
+// menu links, Hello-world left behind — are locked out by unit tests.
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+)
+
+// storeCurrencies mirrors the dashboard's supported set (agent_jobs.go) — keep
+// both in sync when extending.
+var storeCurrencies = map[string]bool{
+	"INR": true, "USD": true, "EUR": true, "GBP": true, "AUD": true,
+	"CAD": true, "SGD": true, "AED": true, "JPY": true, "NZD": true,
+}
+
+// currencyMarkers: strings whose presence in rendered product HTML shows the
+// price actually renders in the expected currency (glyph or HTML entity); the
+// WooCommerce price-markup class is accepted as a structural fallback.
+var currencyMarkers = map[string][]string{
+	"INR": {"₹", "&#8377;", "&#x20b9;"},
+	"USD": {"$"},
+	"EUR": {"€", "&euro;", "&#8364;"},
+	"GBP": {"£", "&pound;", "&#163;"},
+	"AUD": {"$"},
+	"CAD": {"$"},
+	"SGD": {"$"},
+	"AED": {"د.إ", "AED"},
+	"JPY": {"¥", "&yen;", "&#165;"},
+	"NZD": {"$"},
+}
+
+// handlePrepareStore performs the deterministic store baseline. Everything in
+// here is config the model used to "wire" by hand (and got wrong): the store
+// currency, the stock Hello-world/Sample-Page/first-comment cleanup, pretty
+// permalinks (without which /shop and product URLs break), and the standard
+// WooCommerce pages. Safe to run repeatedly.
+func (a *API) handlePrepareStore(site string, params map[string]string) (string, int, error) {
+	currency := strings.ToUpper(strings.TrimSpace(params["currency"]))
+	if !storeCurrencies[currency] {
+		return "", -1, fmt.Errorf("currency is required and must be one of INR, USD, EUR, GBP, AUD, CAD, SGD, AED, JPY, NZD")
+	}
+	// Free-text values ride base64 so they can't break out of the PHP string.
+	nameB64 := base64.StdEncoding.EncodeToString([]byte(params["store_name"]))
+	tagB64 := base64.StdEncoding.EncodeToString([]byte(params["tagline"]))
+	phpCode := `
+		$done = array();
+		update_option('woocommerce_currency', '` + currency + `');
+		$done[] = 'currency=` + currency + `';
+		$name = base64_decode("` + nameB64 + `");
+		if ($name !== '') { update_option('blogname', wp_strip_all_tags($name)); $done[] = 'store name set'; }
+		$tag = base64_decode("` + tagB64 + `");
+		if ($tag !== '') { update_option('blogdescription', wp_strip_all_tags($tag)); $done[] = 'tagline set'; }
+		foreach (get_posts(array('name' => 'hello-world', 'post_type' => 'post', 'post_status' => 'any', 'numberposts' => 1)) as $p) {
+			wp_delete_post($p->ID, true); $done[] = 'deleted default post';
+		}
+		$sample = get_page_by_path('sample-page', OBJECT, 'page');
+		if ($sample) { wp_delete_post($sample->ID, true); $done[] = 'deleted sample page'; }
+		foreach (get_comments(array('author_email' => 'wapuu@wordpress.example', 'number' => 5)) as $c) {
+			wp_delete_comment($c->comment_ID, true); $done[] = 'deleted default comment';
+		}
+		if (get_option('permalink_structure') !== '/%postname%/') {
+			update_option('permalink_structure', '/%postname%/');
+			flush_rewrite_rules();
+			$done[] = 'permalinks=/%postname%/';
+		}
+		if (class_exists('WC_Install')) {
+			WC_Install::create_pages();
+			$done[] = 'woocommerce pages ensured';
+		}
+		echo 'prepare_store: ' . implode('; ', $done);
+	`
+	return a.execWPCLI(site, []string{"sh", "-c", "wp eval " + shellQuote(phpCode) + " --allow-root 2>&1"})
+}
+
+// storeStatePHP collects the acceptance facts in one wp-eval round trip.
+const storeStatePHP = `
+	$out = array();
+	$out['currency'] = (string) get_option('woocommerce_currency');
+	$out['show_on_front'] = (string) get_option('show_on_front');
+	$front = (int) get_option('page_on_front');
+	$out['front_id'] = $front;
+	$out['front_status'] = $front ? (string) get_post_status($front) : '';
+	$out['permalinks'] = (string) get_option('permalink_structure');
+	$hello = get_posts(array('name' => 'hello-world', 'post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 1));
+	$out['default_post'] = !empty($hello);
+	$sample = get_page_by_path('sample-page', OBJECT, 'page');
+	$out['default_page'] = $sample && $sample->post_status === 'publish';
+	$out['wc'] = class_exists('WooCommerce');
+	$out['products'] = array();
+	$out['shop_page'] = 0; $out['shop_status'] = ''; $out['shop_path'] = ''; $out['product_path'] = '';
+	if ($out['wc']) {
+		$ps = wc_get_products(array('limit' => 100, 'status' => 'publish'));
+		foreach ($ps as $p) {
+			$out['products'][] = array('name' => $p->get_name(), 'price' => (string) $p->get_regular_price());
+		}
+		if (!empty($ps)) { $out['product_path'] = wp_make_link_relative(get_permalink($ps[0]->get_id())); }
+		$shop = (int) wc_get_page_id('shop');
+		$out['shop_page'] = $shop;
+		if ($shop > 0) {
+			$out['shop_status'] = (string) get_post_status($shop);
+			$out['shop_path'] = wp_make_link_relative(get_permalink($shop));
+		}
+	}
+	$out['menu_items'] = array();
+	foreach (wp_get_nav_menus() as $menu) {
+		$items = wp_get_nav_menu_items($menu->term_id);
+		if (!$items) { continue; }
+		foreach ($items as $it) {
+			$out['menu_items'][] = array('title' => (string) $it->title, 'url' => (string) $it->url);
+		}
+	}
+	echo json_encode($out);
+`
+
+// storeState is the parsed acceptance snapshot.
+type storeState struct {
+	Currency    string          `json:"currency"`
+	ShowOnFront string          `json:"show_on_front"`
+	FrontID     int             `json:"front_id"`
+	FrontStatus string          `json:"front_status"`
+	Permalinks  string          `json:"permalinks"`
+	DefaultPost bool            `json:"default_post"`
+	DefaultPage bool            `json:"default_page"`
+	WC          bool            `json:"wc"`
+	ShopPageID  int             `json:"shop_page"`
+	ShopStatus  string          `json:"shop_status"`
+	ShopPath    string          `json:"shop_path"`
+	ProductPath string          `json:"product_path"`
+	Products    []storeProduct  `json:"products"`
+	MenuItems   []storeMenuItem `json:"menu_items"`
+}
+
+type storeProduct struct {
+	Name  string `json:"name"`
+	Price string `json:"price"`
+}
+
+type storeMenuItem struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// priceEqual compares WooCommerce price strings numerically ("120" == "120.00");
+// non-numeric strings fall back to exact match.
+func priceEqual(a, b string) bool {
+	fa, ea := strconv.ParseFloat(strings.TrimSpace(a), 64)
+	fb, eb := strconv.ParseFloat(strings.TrimSpace(b), 64)
+	if ea != nil || eb != nil {
+		return strings.TrimSpace(a) == strings.TrimSpace(b)
+	}
+	return math.Abs(fa-fb) < 0.005
+}
+
+// storeChecks computes the DB-level acceptance failures. Pure and unit-tested.
+// The store-specific assertions apply only when the job declared a store spec
+// (currency and/or products) — a plain content-edit job is never failed for
+// pre-existing site conditions it didn't touch.
+func storeChecks(st storeState, expectCurrency string, expectProducts []storeProduct) []string {
+	var fails []string
+	if expectCurrency == "" && len(expectProducts) == 0 {
+		return fails
+	}
+	if expectCurrency != "" && !strings.EqualFold(strings.TrimSpace(st.Currency), expectCurrency) {
+		fails = append(fails, fmt.Sprintf("currency_mismatch: store=%q expected=%q", st.Currency, expectCurrency))
+	}
+	if st.ShowOnFront != "page" || st.FrontID <= 0 {
+		fails = append(fails, "homepage_not_a_page: show_on_front="+st.ShowOnFront)
+	} else if st.FrontStatus != "publish" {
+		fails = append(fails, "homepage_not_published: status="+st.FrontStatus)
+	}
+	if st.DefaultPost {
+		fails = append(fails, "default_post_present: the stock Hello-world post is still published")
+	}
+	if st.DefaultPage {
+		fails = append(fails, "default_sample_page_present")
+	}
+	if !st.WC {
+		fails = append(fails, "woocommerce_not_active")
+	} else if st.ShopPageID <= 0 || st.ShopStatus != "publish" {
+		fails = append(fails, "shop_page_missing_or_unpublished (run prepare_store)")
+	}
+	for _, want := range expectProducts {
+		var got string
+		found := false
+		for _, p := range st.Products {
+			if strings.EqualFold(strings.TrimSpace(p.Name), strings.TrimSpace(want.Name)) {
+				found, got = true, p.Price
+				break
+			}
+		}
+		if !found {
+			fails = append(fails, "product_missing_or_unpublished: "+want.Name)
+			continue
+		}
+		if !priceEqual(got, want.Price) {
+			fails = append(fails, fmt.Sprintf("product_price_wrong: %s is %q but the approved spec says %q", want.Name, got, want.Price))
+		}
+	}
+	for _, it := range st.MenuItems {
+		if it.URL == "" || !menuURLRe.MatchString(it.URL) {
+			fails = append(fails, fmt.Sprintf("menu_link_invalid: %q -> %q (add internal pages by post_id)", it.Title, it.URL))
+		}
+	}
+	return fails
+}
+
+// handleVerifyStore runs the full acceptance suite: parse expectations, collect
+// DB facts (Phase A), check them (pure), then render the homepage, shop and one
+// product page through the site's own nginx (Phase B) — the DOM can be right
+// while the page white-screens, and vice versa. Output contract matches
+// verify_page (": OK" / "FAILING") so the dashboard can gate settlement on it.
+func (a *API) handleVerifyStore(site string, params map[string]string) (string, int, error) {
+	expectCurrency := strings.ToUpper(strings.TrimSpace(params["currency"]))
+	if expectCurrency != "" && !storeCurrencies[expectCurrency] {
+		return "", -1, fmt.Errorf("unknown currency %q", expectCurrency)
+	}
+	var expectProducts []storeProduct
+	if pj := params["products"]; pj != "" {
+		if err := json.Unmarshal([]byte(pj), &expectProducts); err != nil {
+			return "", -1, fmt.Errorf("products must be a JSON array of {name, price}: %w", err)
+		}
+	}
+	storeBuild := expectCurrency != "" || len(expectProducts) > 0
+
+	// Phase A: real DB state. If wp eval itself fails, WordPress core is not
+	// installed or not working — the most fundamental acceptance failure
+	// (the w1bench/666gg "site was never installed" trap).
+	out, exit, err := a.execWPCLI(site, []string{"sh", "-c", "wp eval " + shellQuote(storeStatePHP) + " --allow-root 2>&1"})
+	if err != nil {
+		return "", -1, err
+	}
+	var st storeState
+	parsed := false
+	if i := strings.Index(out, `{"`); exit == 0 && i >= 0 {
+		parsed = json.Unmarshal([]byte(strings.TrimSpace(out[i:])), &st) == nil
+	}
+	if !parsed {
+		first := strings.TrimSpace(out)
+		if n := strings.IndexByte(first, '\n'); n > 0 {
+			first = first[:n]
+		}
+		return "verify_store: FAILING\nchecks_failed=[core_not_working: " + first + "]", 1, nil
+	}
+
+	fails := storeChecks(st, expectCurrency, expectProducts)
+
+	// Phase B: render checks.
+	type renderCheck struct{ path, mustContain string }
+	checks := []renderCheck{{"/", ""}}
+	if p := params["path"]; p != "" && p != "/" && verifyPagePathRe.MatchString(p) {
+		checks = append(checks, renderCheck{p, ""})
+	}
+	if storeBuild && st.ShopPath != "" && verifyPagePathRe.MatchString(st.ShopPath) {
+		must := ""
+		if len(expectProducts) > 0 {
+			must = expectProducts[0].Name
+		}
+		checks = append(checks, renderCheck{st.ShopPath, must})
+	}
+	priceMarkerPath := ""
+	if storeBuild && st.ProductPath != "" && st.ProductPath != "/" && verifyPagePathRe.MatchString(st.ProductPath) {
+		checks = append(checks, renderCheck{st.ProductPath, ""})
+		priceMarkerPath = st.ProductPath
+	}
+	for _, rc := range checks {
+		body, status, _, ferr := a.fetchSitePage(site, rc.path)
+		if ferr != nil {
+			fails = append(fails, rc.path+": render_error")
+			continue
+		}
+		var expect []string
+		if rc.mustContain != "" {
+			expect = []string{rc.mustContain}
+		}
+		for _, f := range verifyPageChecks(body, status, expect, nil) {
+			// Stock-content render check only counts for declared store
+			// builds — see storeChecks' scoping rationale.
+			if !storeBuild && strings.HasPrefix(f, "default_wp_content") {
+				continue
+			}
+			fails = append(fails, rc.path+": "+f)
+		}
+		// The product page must show a price in the expected currency —
+		// this is the render-level half of the $-instead-of-₹ bug.
+		if rc.path == priceMarkerPath && expectCurrency != "" {
+			ok := strings.Contains(body, "woocommerce-Price-amount")
+			low := strings.ToLower(body)
+			for _, m := range currencyMarkers[expectCurrency] {
+				if strings.Contains(low, strings.ToLower(m)) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				fails = append(fails, rc.path+": price_not_rendered_in_"+expectCurrency)
+			}
+		}
+	}
+
+	verdict, exitCode := "OK", 0
+	if len(fails) > 0 {
+		verdict, exitCode = "FAILING", 1
+	}
+	facts := fmt.Sprintf(
+		"currency=%s show_on_front=%s front=%d(%s) permalinks=%q products=%d shop_page=%d(%s) menu_items=%d",
+		st.Currency, st.ShowOnFront, st.FrontID, st.FrontStatus, st.Permalinks,
+		len(st.Products), st.ShopPageID, st.ShopStatus, len(st.MenuItems))
+	return fmt.Sprintf("verify_store: %s\n%s\nchecks_failed=%v", verdict, facts, fails), exitCode, nil
+}

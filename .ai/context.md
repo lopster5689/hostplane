@@ -214,7 +214,7 @@ ACTIVE → DOMAIN_PENDING → DOMAIN_VALIDATING → DOMAIN_ROUTING → DOMAIN_AC
 ## Deploy
 
 ```bash
-cd /home/oni/hostplane
+cd /home/oni/hosto/hostplane
 go build -o control-plane .
 cp control-plane /opt/control/control-plane
 systemctl restart control-plane

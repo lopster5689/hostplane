@@ -1,0 +1,9 @@
+# Hostplane smoke-test sweeper — drop into /etc/cron.d/ on control-01.
+# Reaps any `smoke<unix_ts>` site that's been alive longer than SMOKE_TTL_SECONDS.
+# Runs hourly at :15 so it never collides with the daily 00:00 backup tick.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+15 * * * * root /opt/control/scripts/smoke-sweeper.sh >> /var/log/hostplane-smoke-sweeper.log 2>&1

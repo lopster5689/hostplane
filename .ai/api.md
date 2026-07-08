@@ -44,6 +44,14 @@ Returns `401 Unauthorized` if the key is missing or wrong:
 | `DELETE` | `/api/sites/:site/domain`        | Remove the custom domain                  |
 | `GET`    | `/api/sites/:site/domain/status` | Live DNS + cert status (poll from UI)     |
 | `POST`   | `/api/sites/:site/cert-retry`    | Force Caddy reload + poll cert            |
+| `POST`   | `/api/sites/:site/backup`        | On-demand backup of a site's DB + volume  |
+| `GET`    | `/api/sites/:site/backups`       | List backups for a site                   |
+| `POST`   | `/api/sites/:site/restore/:date` | Restore a site from a dated backup        |
+| `DELETE` | `/api/sites/:site/backups/:date` | Delete a site's backup objects            |
+| `POST`   | `/api/sites/:site/wp-exec`       | Run a structured WP-CLI tool in a site    |
+| `POST`   | `/api/pg/backup`                 | On-demand PostgreSQL backup               |
+| `GET`    | `/api/pg/backups`                | List PostgreSQL backups                   |
+| `POST`   | `/api/pg/restore/:date`          | Restore PostgreSQL from a dated backup    |
 | `GET`    | `/api/jobs/:id`                  | Get job status                            |
 | `DELETE` | `/api/jobs/:id`                  | Hard delete a completed/failed job record |
 
@@ -521,6 +529,245 @@ Hard deletes a job record from the database. Job must be in `COMPLETED` or
 | ----- | ------------------------------------------- |
 | `404` | Job not found                               |
 | `409` | Job is PENDING or PROCESSING (still active) |
+
+---
+
+## `POST /api/sites/:site/backup`
+
+Triggers an on-demand backup of the site's MariaDB database and Docker volume.
+Streams both to R2 under `wp/<site>/db/` and `wp/<site>/vol/`. Runs
+synchronously — response returns after the upload completes.
+
+**Response `200`**
+
+```json
+{ "site": "mysite", "status": "backed_up", "date": "2026-05-15" }
+```
+
+**Errors**
+
+| Code  | Reason                                            |
+| ----- | ------------------------------------------------- |
+| `404` | Site not found                                    |
+| `500` | Backup pipeline failed (dump, tar, or R2 upload)  |
+| `503` | Backup not configured — R2 credentials missing    |
+
+---
+
+## `GET /api/sites/:site/backups`
+
+Lists every backup object in R2 for the site, with type, date, and size. Both
+database and volume entries are returned together.
+
+**Response `200`**
+
+```json
+{
+  "site": "mysite",
+  "backups": [
+    { "date": "2026-05-15", "type": "database", "key": "wp/mysite/db/2026-05-15.sql.gz", "size_bytes": 482113 },
+    { "date": "2026-05-15", "type": "volume",   "key": "wp/mysite/vol/2026-05-15.tar.gz", "size_bytes": 39812455 }
+  ]
+}
+```
+
+An empty `"backups": []` means no objects exist for the site.
+
+**Errors**
+
+| Code  | Reason                                         |
+| ----- | ---------------------------------------------- |
+| `404` | Site not found                                 |
+| `500` | R2 list failed                                 |
+| `503` | Backup not configured — R2 credentials missing |
+
+---
+
+## `POST /api/sites/:site/restore/:date`
+
+Restores both the database and volume from the dated backup. The `:date` path
+parameter must match the `YYYY-MM-DD` form. Runs synchronously.
+
+> Running containers are **not** stopped automatically. Quiesce writes (stop
+> PHP-FPM or put the site in maintenance mode) before restoring for a fully
+> consistent state.
+
+**Response `200`**
+
+```json
+{ "site": "mysite", "date": "2026-05-15", "status": "restored" }
+```
+
+**Errors**
+
+| Code  | Reason                                         |
+| ----- | ---------------------------------------------- |
+| `400` | Invalid date format                            |
+| `404` | Site not found                                 |
+| `500` | Restore failed (download, untar, or DB import) |
+| `503` | Backup not configured — R2 credentials missing |
+
+---
+
+## `DELETE /api/sites/:site/backups/:date`
+
+Deletes the database and volume backup objects for the site on the given
+date. If only one of the two exists, it is still deleted; the response lists
+which keys were removed.
+
+**Response `200`**
+
+```json
+{
+  "site": "mysite",
+  "date": "2026-05-15",
+  "deleted": ["wp/mysite/db/2026-05-15.sql.gz", "wp/mysite/vol/2026-05-15.tar.gz"],
+  "errors": []
+}
+```
+
+**Errors**
+
+| Code  | Reason                                         |
+| ----- | ---------------------------------------------- |
+| `400` | Invalid date format                            |
+| `404` | Site not found                                 |
+| `500` | Both DB and volume deletes failed              |
+| `503` | Backup not configured — R2 credentials missing |
+
+---
+
+## `POST /api/sites/:site/wp-exec`
+
+Runs a **structured** WP-CLI tool inside the site's PHP container. The control
+plane never passes raw command strings — the request names a tool, the
+control plane builds the WP-CLI argv from validated parameters. Designed to
+be driven by an AI agent making tool calls.
+
+**Request**
+
+```json
+{ "tool": "list_posts", "params": { "post_type": "page", "status": "publish" } }
+```
+
+**Response `200`**
+
+```json
+{
+  "site": "mysite",
+  "tool": "list_posts",
+  "output": "[ ... wp output ... ]",
+  "exit_code": 0
+}
+```
+
+**Available tools**
+
+| Tool                | Params                                    | Notes                                              |
+| ------------------- | ----------------------------------------- | -------------------------------------------------- |
+| `get_site_info`     | —                                         | Returns blogname                                   |
+| `get_option`        | `key`                                     | Only allowlisted keys (no `siteurl`, `home`, etc.) |
+| `update_option`     | `key`, `value`                            | Allowlist applies                                  |
+| `list_posts`        | `post_type` (`post`/`page`), `status`     | JSON output                                        |
+| `get_post`          | `id`                                      | Positive integer                                   |
+| `update_post`       | `id`, `field`, `value`                    | `field` ∈ {title, content, excerpt, status}        |
+| `create_post`       | `post_type`, `post_title`, `post_content` | Always created as `draft`                          |
+| `list_plugins`      | —                                         |                                                    |
+| `install_plugin`    | `slug`                                    | Validates wordpress.org slug; auto-activates       |
+| `deactivate_plugin` | `slug`                                    |                                                    |
+| `list_themes`       | —                                         |                                                    |
+| `activate_theme`    | `slug`                                    |                                                    |
+| `search_replace`    | `old`, `new`                              | **Dry-run only** in current build                  |
+| `media_import`      | `url`, `title`                            | HTTPS only, SSRF guard against RFC1918 + loopback  |
+
+**Limits**
+
+- 30 s exec timeout
+- Output capped at 1 MB (truncation marker appended)
+- Container runs as `www-data:www-data` (uid/gid 33)
+
+**Errors**
+
+| Code  | Reason                                                            |
+| ----- | ----------------------------------------------------------------- |
+| `400` | Missing `tool`, unknown tool, or invalid params                   |
+| `404` | Site not found                                                    |
+| `409` | Site is not ACTIVE or DOMAIN_ACTIVE                               |
+| `422` | Tool ran but `exit_code != 0` — response body still has `output`  |
+| `500` | Docker exec failed (container missing, attach failed, etc.)       |
+
+---
+
+## `POST /api/pg/backup`
+
+On-demand backup of the external PostgreSQL `hosto` database (the dashboard's
+data store). Streams `pg_dump` → gzip → R2 under `postgres/<db>/`.
+
+**Response `200`**
+
+```json
+{ "database": "hosto", "status": "backed_up", "date": "2026-05-15" }
+```
+
+**Errors**
+
+| Code  | Reason                                            |
+| ----- | ------------------------------------------------- |
+| `500` | Backup pipeline failed                            |
+| `503` | PG backup not configured — R2 or `POSTGRES_DSN` missing |
+
+---
+
+## `GET /api/pg/backups`
+
+Lists PG backup objects in R2 along with the last recorded backup time
+from the control DB.
+
+**Response `200`**
+
+```json
+{
+  "database": "hosto",
+  "backups": [
+    {
+      "key": "postgres/hosto/2026-05-15.sql.gz",
+      "date": "2026-05-15",
+      "size_bytes": 18203112,
+      "last_modified": "2026-05-15T03:00:11Z"
+    }
+  ],
+  "last_backup_at": "2026-05-15T03:00:11Z",
+  "last_backup_key": "postgres/hosto/2026-05-15.sql.gz"
+}
+```
+
+**Errors**
+
+| Code  | Reason                                                  |
+| ----- | ------------------------------------------------------- |
+| `500` | R2 list failed                                          |
+| `503` | PG backup not configured — R2 or `POSTGRES_DSN` missing |
+
+---
+
+## `POST /api/pg/restore/:date`
+
+Restores the PostgreSQL database from the dated backup. Runs synchronously.
+The target database must already exist on the PG server.
+
+**Response `200`**
+
+```json
+{ "database": "hosto", "date": "2026-05-15", "status": "restored" }
+```
+
+**Errors**
+
+| Code  | Reason                                                  |
+| ----- | ------------------------------------------------------- |
+| `400` | Invalid date format                                     |
+| `500` | Restore failed (download or `psql` import)              |
+| `503` | PG backup not configured — R2 or `POSTGRES_DSN` missing |
 
 ---
 

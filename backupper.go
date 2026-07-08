@@ -33,6 +33,17 @@ func NewBackupper(docker *client.Client, cfg Config, r2 *R2Client, db *DB) *Back
 	return &Backupper{docker: docker, cfg: cfg, r2: r2, db: db}
 }
 
+// resolveResourceNames returns the DB name and volume name for a site based on
+// its type. Avoids repeated DB lookups by accepting the already-fetched Site.
+func resolveResourceNames(s *Site) (dbName, volName string) {
+	switch s.SiteType {
+	case "n8n":
+		return N8nDatabaseName(s.Site), N8nVolumeName(s.Site)
+	default:
+		return WPDatabaseName(s.Site), VolumeName(s.Site)
+	}
+}
+
 // BackupSite backs up the database and volume for a single site.
 // Both must succeed — the first failure aborts and returns an error.
 // Called by Destroyer.Run() before any destructive step.
@@ -40,20 +51,141 @@ func (b *Backupper) BackupSite(site string) error {
 	if b.r2 == nil {
 		return fmt.Errorf("R2 not configured — cannot back up site %s", site)
 	}
-	if err := b.BackupDatabase(site); err != nil {
-		return fmt.Errorf("database backup failed: %w", err)
+
+	s, err := b.db.GetSite(site)
+	if err != nil {
+		return fmt.Errorf("get site for backup: %w", err)
 	}
-	if err := b.BackupVolume(site); err != nil {
+
+	if s.SiteType == "static" {
+		log.Printf("[backupper] site=%s type=static — skipping backup (no DB/volume)", site)
+		return nil
+	}
+
+	_, volName := resolveResourceNames(s)
+
+	if s.SiteType == "n8n" {
+		if err := b.backupN8nDatabase(site); err != nil {
+			return fmt.Errorf("n8n database backup failed: %w", err)
+		}
+	} else {
+		if err := b.BackupDatabase(site); err != nil {
+			return fmt.Errorf("database backup failed: %w", err)
+		}
+	}
+
+	if err := b.backupVolumeByName(site, volName); err != nil {
 		return fmt.Errorf("volume backup failed: %w", err)
 	}
 
-	// Record successful backup time in the control DB
 	if err := b.db.UpdateLastBackupAt(site, time.Now().UTC()); err != nil {
 		log.Printf("[backupper] site=%s warning: could not update last_backup_at: %v", site, err)
-		// non-fatal — the backup data is in R2 regardless
 	}
 
 	log.Printf("[backupper] site=%s backup complete (db + volume)", site)
+	return nil
+}
+
+// backupN8nDatabase runs pg_dump for an n8n site's PostgreSQL database and
+// streams the gzip-compressed output directly to R2.
+func (b *Backupper) backupN8nDatabase(site string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	dbName := N8nDatabaseName(site)
+	dbUser := N8nDatabaseUser(site)
+	dbPass, err := b.db.GetDBPassword(site)
+	if err != nil {
+		return fmt.Errorf("get n8n db password: %w", err)
+	}
+	_, _, pgHost, pgPort, _ := parsePGDSN(b.cfg.N8nPGDSN)
+
+	containerName := fmt.Sprintf("backup_n8ndb_%s_%d", site, time.Now().UnixNano())
+
+	createResp, err := b.docker.ContainerCreate(ctx,
+		&container.Config{
+			Image: "postgres:16",
+			Cmd: []string{
+				"pg_dump",
+				"-h", pgHost,
+				"-p", pgPort,
+				"-U", dbUser,
+				"-F", "p",
+				"--no-password",
+				dbName,
+			},
+			Env:          []string{"PGPASSWORD=" + dbPass},
+			AttachStdout: true,
+			AttachStderr: true,
+		},
+		&container.HostConfig{
+			NetworkMode: container.NetworkMode(b.cfg.DockerNetwork),
+			AutoRemove:  false,
+		},
+		nil, nil, containerName,
+	)
+	if err != nil {
+		return fmt.Errorf("create pg_dump container: %w", err)
+	}
+
+	defer func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cleanCancel()
+		b.docker.ContainerRemove(cleanCtx, createResp.ID, types.ContainerRemoveOptions{Force: true})
+	}()
+
+	attachResp, err := b.docker.ContainerAttach(ctx, createResp.ID, types.ContainerAttachOptions{
+		Stream: true,
+		Stdout: true,
+		Stderr: false,
+	})
+	if err != nil {
+		return fmt.Errorf("attach pg_dump container: %w", err)
+	}
+	defer attachResp.Close()
+
+	if err := b.docker.ContainerStart(ctx, createResp.ID, types.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("start pg_dump container: %w", err)
+	}
+
+	rawStream := stripDockerMux(attachResp.Reader)
+
+	pr, pw := io.Pipe()
+	gzDone := make(chan error, 1)
+	go func() {
+		gz := gzip.NewWriter(pw)
+		_, copyErr := io.Copy(gz, rawStream)
+		gz.Close()
+		pw.CloseWithError(copyErr)
+		gzDone <- copyErr
+	}()
+
+	key := keyForDB(site, dateStamp())
+	uploadErr := b.r2.Upload(ctx, key, pr, "application/gzip")
+	<-gzDone
+
+	exitCode, waitErr := b.waitContainer(ctx, createResp.ID)
+	if waitErr != nil {
+		if uploadErr == nil {
+			b.r2.deleteObject(context.Background(), key)
+		}
+		return fmt.Errorf("wait for pg_dump container: %w", waitErr)
+	}
+	if exitCode != 0 {
+		b.logContainerStderr(createResp.ID, fmt.Sprintf("pg_dump n8n site=%s", site))
+		if uploadErr == nil {
+			if delErr := b.r2.deleteObject(context.Background(), key); delErr != nil {
+				log.Printf("[backupper] site=%s WARNING: corrupt backup object %s could not be deleted: %v", site, key, delErr)
+			}
+		}
+		return fmt.Errorf("pg_dump exited with code %d — backup aborted", exitCode)
+	}
+
+	if uploadErr != nil {
+		return fmt.Errorf("upload n8n DB backup to R2: %w", uploadErr)
+	}
+
+	log.Printf("[backupper] site=%s n8n DB backup → %s", site, key)
 	return nil
 }
 
@@ -219,14 +351,16 @@ func (b *Backupper) BackupDatabase(site string) error {
 // ContainerWait is used after upload to verify tar exited cleanly.
 // If non-zero, the uploaded object is deleted from R2 before returning error.
 func (b *Backupper) BackupVolume(site string) error {
+	return b.backupVolumeByName(site, VolumeName(site))
+}
+
+func (b *Backupper) backupVolumeByName(site, volumeName string) error {
 	if b.r2 == nil {
 		return fmt.Errorf("R2 not configured")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-
-	volumeName := VolumeName(site)
 	containerName := fmt.Sprintf("backup_vol_%s_%d", site, time.Now().UnixNano())
 
 	createResp, err := b.docker.ContainerCreate(ctx,
@@ -341,14 +475,115 @@ func (b *Backupper) RestoreSite(site, date string) error {
 		return fmt.Errorf("volume backup not found in R2 (%s): %w", volKey, err)
 	}
 
-	if err := b.RestoreDatabase(ctx, site, date); err != nil {
-		return fmt.Errorf("database restore: %w", err)
+	s, err := b.db.GetSite(site)
+	if err != nil {
+		return fmt.Errorf("get site for restore: %w", err)
 	}
-	if err := b.RestoreVolume(ctx, site, date); err != nil {
+
+	if s.SiteType == "n8n" {
+		if err := b.restoreN8nDatabase(ctx, site, date); err != nil {
+			return fmt.Errorf("n8n database restore: %w", err)
+		}
+	} else {
+		if err := b.RestoreDatabase(ctx, site, date); err != nil {
+			return fmt.Errorf("database restore: %w", err)
+		}
+	}
+
+	_, volName := resolveResourceNames(s)
+	if err := b.restoreVolumeByName(ctx, site, date, volName); err != nil {
 		return fmt.Errorf("volume restore: %w", err)
 	}
 
 	log.Printf("[backupper] site=%s restored from %s (db + volume)", site, date)
+	return nil
+}
+
+// restoreN8nDatabase downloads a .sql.gz from R2 and pipes it into an
+// ephemeral psql container to restore an n8n site's PostgreSQL database.
+func (b *Backupper) restoreN8nDatabase(ctx context.Context, site, date string) error {
+	key := keyForDB(site, date)
+
+	rc, err := b.r2.Download(ctx, key)
+	if err != nil {
+		return fmt.Errorf("download n8n DB backup %s: %w", key, err)
+	}
+	defer rc.Close()
+
+	gzReader, err := gzip.NewReader(rc)
+	if err != nil {
+		return fmt.Errorf("decompress n8n DB backup: %w", err)
+	}
+	defer gzReader.Close()
+
+	dbName := N8nDatabaseName(site)
+	dbUser := N8nDatabaseUser(site)
+	dbPass, err := b.db.GetDBPassword(site)
+	if err != nil {
+		return fmt.Errorf("get n8n db password: %w", err)
+	}
+	_, _, pgHost, pgPort, _ := parsePGDSN(b.cfg.N8nPGDSN)
+
+	containerName := fmt.Sprintf("restore_n8ndb_%s_%d", site, time.Now().UnixNano())
+
+	createResp, err := b.docker.ContainerCreate(ctx,
+		&container.Config{
+			Image: "postgres:16",
+			Cmd: []string{
+				"psql",
+				"-h", pgHost,
+				"-p", pgPort,
+				"-U", dbUser,
+				"-d", dbName,
+			},
+			Env:         []string{"PGPASSWORD=" + dbPass},
+			AttachStdin: true,
+			OpenStdin:   true,
+		},
+		&container.HostConfig{
+			NetworkMode: container.NetworkMode(b.cfg.DockerNetwork),
+			AutoRemove:  false,
+		},
+		nil, nil, containerName,
+	)
+	if err != nil {
+		return fmt.Errorf("create psql restore container: %w", err)
+	}
+
+	defer func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cleanCancel()
+		b.docker.ContainerRemove(cleanCtx, createResp.ID, types.ContainerRemoveOptions{Force: true})
+	}()
+
+	attachResp, err := b.docker.ContainerAttach(ctx, createResp.ID, types.ContainerAttachOptions{
+		Stream: true,
+		Stdin:  true,
+	})
+	if err != nil {
+		return fmt.Errorf("attach psql restore container: %w", err)
+	}
+	defer attachResp.Close()
+
+	if err := b.docker.ContainerStart(ctx, createResp.ID, types.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("start psql restore container: %w", err)
+	}
+
+	if _, err := io.Copy(attachResp.Conn, gzReader); err != nil {
+		return fmt.Errorf("stream SQL to psql: %w", err)
+	}
+	attachResp.CloseWrite()
+
+	exitCode, waitErr := b.waitContainer(ctx, createResp.ID)
+	if waitErr != nil {
+		return fmt.Errorf("wait for psql restore: %w", waitErr)
+	}
+	if exitCode != 0 {
+		b.logContainerStderr(createResp.ID, fmt.Sprintf("psql restore n8n site=%s", site))
+		return fmt.Errorf("psql restore exited with code %d", exitCode)
+	}
+
+	log.Printf("[backupper] site=%s n8n DB restored from %s", site, key)
 	return nil
 }
 
@@ -456,6 +691,10 @@ func (b *Backupper) RestoreDatabase(ctx context.Context, site, date string) erro
 // pipes it into an ephemeral alpine container that extracts it into the site's
 // Docker volume (mounted read-write at /data).
 func (b *Backupper) RestoreVolume(ctx context.Context, site, date string) error {
+	return b.restoreVolumeByName(ctx, site, date, VolumeName(site))
+}
+
+func (b *Backupper) restoreVolumeByName(ctx context.Context, site, date, volumeName string) error {
 	key := keyForVolume(site, date)
 
 	rc, err := b.r2.Download(ctx, key)
@@ -463,8 +702,6 @@ func (b *Backupper) RestoreVolume(ctx context.Context, site, date string) error 
 		return fmt.Errorf("download volume backup %s: %w", key, err)
 	}
 	defer rc.Close()
-
-	volumeName := VolumeName(site)
 	containerName := fmt.Sprintf("restore_vol_%s_%d", site, time.Now().UnixNano())
 
 	createResp, err := b.docker.ContainerCreate(ctx,

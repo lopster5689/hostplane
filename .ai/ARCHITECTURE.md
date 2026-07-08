@@ -32,6 +32,7 @@
 24. [Migration History](#24-migration-history)
 25. [Outstanding Work / Future](#25-outstanding-work--future)
 26. [Dependencies](#26-dependencies)
+27. [WP-CLI Execution](#27-wp-cli-execution-wp_execgo)
 
 ---
 
@@ -189,7 +190,7 @@ monitor-01 (Prometheus)
 
 A single Go binary (`control-plane`) compiled from module `control-plane`, running as a systemd service on control-01. It is the sole orchestrator of all infrastructure mutations.
 
-**Source:** `/home/oni/hostplane/` (development machine)
+**Source:** `/home/oni/hosto/hostplane/` (development machine)
 **Deployed to:** `/opt/control/control-plane` (control-01)
 
 ### 5.2 Startup Sequence (`main.go`)
@@ -636,8 +637,9 @@ type R2Client struct {
 
 | Data           | Method                 | Container                                  | R2 Key                               |
 | -------------- | ---------------------- | ------------------------------------------ | ------------------------------------ |
-| MySQL database | `BackupDatabase(site)` | Ephemeral `mysql:8` on `wp_backend`        | `databases/<site>/YYYY-MM-DD.sql.gz` |
+| MySQL database | `BackupDatabase(site)` | Ephemeral `mariadb:10` on `wp_backend`     | `databases/<site>/YYYY-MM-DD.sql.gz` |
 | Docker volume  | `BackupVolume(site)`   | Ephemeral `alpine:latest` (vol mounted RO) | `volumes/<site>/YYYY-MM-DD.tar.gz`   |
+| n8n PG database| `backupN8nDatabase(site)` | Ephemeral `postgres:16` on `wp_backend` | `databases/<site>/YYYY-MM-DD.sql.gz` |
 
 **Database backup streaming pipeline:**
 
@@ -658,16 +660,17 @@ tar -czf - -C /data . (in container, already gzip)
       → r2.Upload (direct, no extra gzip)
 ```
 
-**mysqldump flags:** `--single-transaction` (consistent InnoDB snapshot), `--quick` (row-by-row, no buffering), `--set-gtid-purged=OFF`
+**mysqldump flags:** `--single-transaction` (consistent InnoDB snapshot), `--quick` (row-by-row, no buffering)
 
 **Exit code verification:** After upload, checks container exit code. Non-zero → deletes the corrupt R2 object + logs up to 4KB of stderr.
 
 #### Restore
 
-| Data           | Method                             | Container                                        |
-| -------------- | ---------------------------------- | ------------------------------------------------ |
-| MySQL database | `RestoreDatabase(ctx, site, date)` | Ephemeral `mysql:8`, SQL piped to stdin          |
-| Docker volume  | `RestoreVolume(ctx, site, date)`   | Ephemeral `alpine:latest`, tar.gz piped to stdin |
+| Data           | Method                             | Container                                            |
+| -------------- | ---------------------------------- | ---------------------------------------------------- |
+| MySQL database | `RestoreDatabase(ctx, site, date)` | Ephemeral `mariadb:10`, SQL piped to stdin           |
+| Docker volume  | `RestoreVolume(ctx, site, date)`   | Ephemeral `alpine:latest`, tar.gz piped to stdin     |
+| n8n PG database| `restoreN8nDatabase(ctx, site, date)` | Ephemeral `postgres:16`, SQL piped to psql stdin  |
 
 **Database restore streaming:**
 
@@ -691,10 +694,14 @@ r2.Download → io.Copy(containerStdin, raw .tar.gz) → CloseWrite (EOF)
 | Event                    | Frequency                             | Details                                |
 | ------------------------ | ------------------------------------- | -------------------------------------- |
 | Full backup of all sites | Every 24 hours + immediate on startup | Skips DESTROYED, FAILED, CREATED sites |
-| Cleanup                  | Every 7th daily tick                  | Deletes objects older than 30 days     |
+| Cleanup                  | Every daily tick                      | Deletes objects older than 3 days      |
 | `last_backup_at` updated | After each successful site backup     | Stored in `sites` table                |
 
 `BackupAll()`: One site failure never stops other sites. Logs final ok/failed counts.
+
+**n8n sites:** Detected via `SiteType == "n8n"`. Uses `pg_dump` (in `postgres:16` container) against the N8n PostgreSQL DSN instead of `mysqldump`. Volume backup uses `n8n_<site>` volume name.
+
+**Static sites:** Skipped entirely (no database or volume to back up).
 
 ### 13.4 Subsystem B: Infrastructure Backups
 
@@ -702,7 +709,7 @@ r2.Download → io.Copy(containerStdin, raw .tar.gz) → CloseWrite (EOF)
 
 | Data                                     | Schedule | Container                           | R2 Key                                           | Retention |
 | ---------------------------------------- | -------- | ----------------------------------- | ------------------------------------------------ | --------- |
-| Controlplane DB (`controlplane`)         | Hourly   | Ephemeral `mysql:8` on `wp_backend` | `infra/controlplane/YYYY-MM-DDTHH-MM-SSZ.sql.gz` | 90 days   |
+| Controlplane DB (`controlplane`)         | Hourly   | Ephemeral `mariadb:10` on `wp_backend` | `infra/controlplane/YYYY-MM-DDTHH-MM-SSZ.sql.gz` | 90 days   |
 | Docker TLS certs (`/opt/control/certs/`) | Daily    | None (local filesystem)             | `infra/certs/YYYY-MM-DD.tar.gz`                  | 30 days   |
 
 **DB backup credentials:** Parsed from `ControlDSN` (not `WordPressDSN`).
@@ -794,11 +801,12 @@ All ephemeral backup/restore containers follow the same pattern:
 
 ### 14.3 Site Backups
 
-| Method | Path                             | Auth | Description                                           |
-| ------ | -------------------------------- | ---- | ----------------------------------------------------- |
-| `POST` | `/api/sites/:site/backup`        | Yes  | Trigger synchronous site backup (DB + volume).        |
-| `GET`  | `/api/sites/:site/backups`       | Yes  | List R2 backup objects for site.                      |
-| `POST` | `/api/sites/:site/restore/:date` | Yes  | Restore from date backup (`YYYY-MM-DD`). Synchronous. |
+| Method   | Path                             | Auth | Description                                              |
+| -------- | -------------------------------- | ---- | -------------------------------------------------------- |
+| `POST`   | `/api/sites/:site/backup`        | Yes  | Trigger synchronous site backup (DB + volume).           |
+| `GET`    | `/api/sites/:site/backups`       | Yes  | List R2 backup objects for site.                         |
+| `POST`   | `/api/sites/:site/restore/:date` | Yes  | Restore from date backup (`YYYY-MM-DD`). Synchronous.    |
+| `DELETE` | `/api/sites/:site/backups/:date` | Yes  | Delete DB + volume objects for the dated backup.         |
 
 ### 14.4 PostgreSQL Backups
 
@@ -808,13 +816,21 @@ All ephemeral backup/restore containers follow the same pattern:
 | `GET`  | `/api/pg/backups`       | Yes  | List PG backups in R2.         |
 | `POST` | `/api/pg/restore/:date` | Yes  | Restore PG from date backup.   |
 
-### 14.5 Health
+### 14.5 WP-CLI Execution
+
+| Method | Path                         | Auth | Description                                                    |
+| ------ | ---------------------------- | ---- | -------------------------------------------------------------- |
+| `POST` | `/api/sites/:site/wp-exec`   | Yes  | Run a structured WP-CLI tool inside the site's PHP container.  |
+
+See Section 27 for the tool catalog and security model.
+
+### 14.6 Health
 
 | Method | Path          | Auth   | Description            |
 | ------ | ------------- | ------ | ---------------------- |
 | `GET`  | `/api/health` | **No** | Health check endpoint. |
 
-### 14.6 Validation Rules
+### 14.7 Validation Rules
 
 - Site names: lowercase alphanumeric only (`^[a-z0-9]+$`)
 - Custom domains: regex validated, no wildcards, max 253 chars, must not be a subdomain of BaseDomain
@@ -989,13 +1005,15 @@ All naming functions are pure, deterministic, package-level functions:
 
 ### 18.3 Ephemeral Backup/Restore Containers
 
-| Operation           | Image           | Network      | Volume                         | Stdin/Stdout    |
-| ------------------- | --------------- | ------------ | ------------------------------ | --------------- |
-| Site DB backup      | `mysql:8`       | `wp_backend` | —                              | stdout (attach) |
-| Site DB restore     | `mysql:8`       | `wp_backend` | —                              | stdin (attach)  |
-| Site volume backup  | `alpine:latest` | default      | `wp_<site>` → `/data` (RO)     | stdout (attach) |
-| Site volume restore | `alpine:latest` | default      | `wp_<site>` → `/data` (RW)     | stdin (attach)  |
-| Infra DB backup     | `mysql:8`       | `wp_backend` | —                              | stdout (attach) |
+| Operation              | Image           | Network      | Volume                                  | Stdin/Stdout    |
+| ---------------------- | --------------- | ------------ | --------------------------------------- | --------------- |
+| Site DB backup (WP)    | `mariadb:10`    | `wp_backend` | —                                       | stdout (attach) |
+| Site DB backup (n8n)   | `postgres:16`   | `wp_backend` | —                                       | stdout (attach) |
+| Site DB restore (WP)   | `mariadb:10`    | `wp_backend` | —                                       | stdin (attach)  |
+| Site DB restore (n8n)  | `postgres:16`   | `wp_backend` | —                                       | stdin (attach)  |
+| Site volume backup     | `alpine:latest` | default      | `wp_<site>` / `n8n_<site>` → `/data` (RO) | stdout (attach) |
+| Site volume restore    | `alpine:latest` | default      | `wp_<site>` / `n8n_<site>` → `/data` (RW) | stdin (attach)  |
+| Infra DB backup        | `mariadb:10`    | `wp_backend` | —                                       | stdout (attach) |
 | PG DB backup        | `postgres:16`   | `bridge`     | —                              | stdout (attach) |
 | PG DB restore       | `postgres:16`   | `bridge`     | —                              | stdin (attach)  |
 | Static site upload  | `busybox`       | —            | `caddy_static_sites` → `/data` | CopyToContainer |
@@ -1038,7 +1056,7 @@ Note: Per-site nginx configs are **not** stored on the app-01 filesystem. The co
 ### 19.3 Development Machine
 
 ```
-/home/oni/hostplane/
+/home/oni/hosto/hostplane/
 ├── main.go                    # wiring, workers, HTTP server, shutdown
 ├── api.go                     # all HTTP handlers (939 lines)
 ├── config.go                  # env loading
@@ -1096,8 +1114,8 @@ postgres/
 
 | Prefix                | Retention | Cleanup Frequency             |
 | --------------------- | --------- | ----------------------------- |
-| `databases/`          | 30 days   | Weekly (every 7th daily tick) |
-| `volumes/`            | 30 days   | Weekly (every 7th daily tick) |
+| `databases/`          | 3 days    | Daily (every tick)            |
+| `volumes/`            | 3 days    | Daily (every tick)            |
 | `infra/controlplane/` | 90 days   | Weekly (7-day ticker)         |
 | `infra/certs/`        | 30 days   | Weekly (7-day ticker)         |
 | `postgres/<dbname>/`  | 30 days   | Weekly (every 7th daily tick) |
@@ -1263,3 +1281,58 @@ The `TunnelManager` is still wired in `main.go` and injected into `API`, but it 
 | `github.com/go-sql-driver/mysql`                  | v1.9.3   | MySQL/MariaDB driver                      |
 | `github.com/google/uuid`                          | v1.6.0   | UUID generation for job IDs               |
 | `gopkg.in/yaml.v3`                                | v3.0.1   | YAML parsing (cloudflared config, legacy) |
+
+---
+
+## 27. WP-CLI Execution (`wp_exec.go`)
+
+A single endpoint, `POST /api/sites/:site/wp-exec`, runs WP-CLI commands inside a site's PHP container. Designed for AI agent tool calls: the caller names a **tool**, not a raw command. The control plane maps the tool + params to a validated argv and execs WP-CLI; raw command strings are never accepted.
+
+### 27.1 Request / Response
+
+```json
+// request
+{ "tool": "list_posts", "params": { "post_type": "page" } }
+
+// response (200)
+{ "site": "mysite", "tool": "list_posts", "output": "[...]", "exit_code": 0 }
+```
+
+A non-zero `exit_code` returns HTTP `422` with the same body shape.
+
+### 27.2 Tool Catalog (`buildTool`)
+
+| Tool                | Params                                    | Notes                                                       |
+| ------------------- | ----------------------------------------- | ----------------------------------------------------------- |
+| `get_site_info`     | —                                         | Returns `blogname`                                          |
+| `get_option`        | `key`                                     | Key must be in `safeOptionKeys` allowlist                   |
+| `update_option`     | `key`, `value`                            | Same allowlist                                              |
+| `list_posts`        | `post_type`, `status`                     | `post_type` ∈ {post, page}; `status` ∈ {publish, draft, any} |
+| `get_post`          | `id`                                      | `id` must be a positive integer                             |
+| `update_post`       | `id`, `field`, `value`                    | `field` ∈ {post_title, post_content, post_excerpt, post_status} |
+| `create_post`       | `post_type`, `post_title`, `post_content` | Always inserted as `draft`                                  |
+| `list_plugins`      | —                                         |                                                             |
+| `install_plugin`    | `slug`                                    | Slug regex `^[a-z0-9]+(-[a-z0-9]+)*$`; auto-activates       |
+| `deactivate_plugin` | `slug`                                    | Same slug regex                                             |
+| `list_themes`       | —                                         |                                                             |
+| `activate_theme`    | `slug`                                    | Same slug regex                                             |
+| `search_replace`    | `old`, `new`                              | **Dry-run only** (`--dry-run`) — live writes deferred to V2 |
+| `media_import`      | `url`, `title`                            | HTTPS only; SSRF block list for loopback + RFC1918 ranges   |
+
+### 27.3 Security Model
+
+- **No raw commands.** The control plane builds argv from a fixed switch; the caller cannot reach `wp eval`, `wp db`, or any unlisted subcommand.
+- **`safeOptionKeys` allowlist.** Excludes `siteurl`, `home`, `admin_email`, and anything else that would let the agent break routing or hijack the install.
+- **Field allowlist.** Post updates can only touch title / content / excerpt / status.
+- **Slug regex.** Plugin/theme installs only accept `[a-z0-9-]+`, blocking path traversal and shell metacharacters.
+- **SSRF guard on `media_import`.** Rejects HTTP, loopback, link-local, and all RFC1918 subnets.
+- **`search_replace` is dry-run only.** Live execution is gated on a future pre-backup hook (V2).
+
+### 27.4 Execution
+
+- Exec target: `PHPContainerName(site)` (the per-site `php_<site>` container).
+- User: `33:33` (`www-data`) so WP-CLI-created files have the right ownership.
+- Working directory: `/var/www/html`.
+- Timeout: 30 seconds (`context.WithTimeout`).
+- Stdout is read through `stripDockerMux` (shared with the backup subsystem) and capped at 1 MiB; truncation appends `[output truncated at 1MB]`.
+- Site must be in `ACTIVE` or `DOMAIN_ACTIVE`; otherwise `409`.

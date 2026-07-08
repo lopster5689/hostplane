@@ -55,6 +55,11 @@ type Config struct {
 	// backup. Defaults to true. Set REQUIRE_BACKUP_BEFORE_DESTROY=false to
 	// skip during development / debugging when R2 is not yet configured.
 	RequireBackupBeforeDestroy bool
+
+	// n8n
+	N8nImage         string // Docker image for n8n containers
+	N8nPGDSN         string // PostgreSQL admin DSN on state-01 for creating per-site n8n databases
+	N8nDockerNetwork string // Docker network for n8n containers (separate from wp_backend); Caddy must also join it
 }
 
 func LoadConfig() Config {
@@ -84,6 +89,12 @@ func LoadConfig() Config {
 		R2Bucket:                   getEnv("R2_BUCKET", "hostplane-backups"),
 		RequireBackupBeforeDestroy: getEnvBool("REQUIRE_BACKUP_BEFORE_DESTROY", true),
 		PostgresDSN:                getEnv("POSTGRES_DSN", ""),
+		// Pin a concrete version — never :latest. n8n runs DB migrations on boot,
+		// so an unpinned tag can silently jump a major (e.g. 1.x→2.x) on container
+		// recreate and irreversibly migrate a customer's DB. Override per instance.
+		N8nImage:                   getEnv("N8N_IMAGE", "n8nio/n8n:2.27.4"),
+		N8nPGDSN:                   getEnv("N8N_PG_DSN", ""),
+		N8nDockerNetwork:           getEnv("N8N_DOCKER_NETWORK", "n8n_backend"),
 	}
 }
 

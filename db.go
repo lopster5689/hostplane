@@ -15,6 +15,9 @@ const (
 	JobProvision       JobType   = "PROVISION"
 	JobDestroy         JobType   = "DESTROY"
 	JobStaticProvision JobType   = "STATIC_PROVISION"
+	JobStaticUpdate    JobType   = "STATIC_UPDATE"
+	JobN8nProvision    JobType   = "N8N_PROVISION"
+	JobN8nDestroy      JobType   = "N8N_DESTROY"
 	StatusPending      JobStatus = "PENDING"
 	StatusProcessing   JobStatus = "PROCESSING"
 	StatusCompleted    JobStatus = "COMPLETED"
@@ -22,15 +25,17 @@ const (
 )
 
 type Site struct {
-	Site         string
-	Domain       string
-	Status       string
-	JobID        string
-	UserID       string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	CustomDomain string
-	LastBackupAt *time.Time // nullable — nil until first backup
+	Site          string
+	Domain        string
+	Status        string
+	JobID         string
+	UserID        string
+	SiteType      string // "wordpress", "static", "n8n"
+	EncryptionKey string // n8n only — persists N8N_ENCRYPTION_KEY across container recreations
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	CustomDomain  string
+	LastBackupAt  *time.Time // nullable — nil until first backup
 }
 
 func (d *DB) SetCustomDomain(site, domain string) error {
@@ -47,13 +52,20 @@ func (d *DB) RemoveCustomDomain(site string) error {
 	return err
 }
 
-func (d *DB) FailJob(jobID, site string, jobErr error) error {
+func (d *DB) FailJob(jobID, site string, jobType JobType, jobErr error) error {
 	msg := jobErr.Error()
 	_, err := d.conn.Exec(`
         UPDATE jobs SET status='FAILED', error=?, updated_at=NOW() WHERE id=?
     `, msg, jobID)
 	if err != nil {
 		return err
+	}
+	// A failed STATIC_UPDATE must NOT downgrade the site: the existing files are
+	// untouched (RunUpdate swaps in place only on success) so the site is still
+	// live and ACTIVE. Downgrading to FAILED would wedge future updates, which
+	// require the site to be ACTIVE.
+	if jobType == JobStaticUpdate {
+		return nil
 	}
 	// Mark site as FAILED so it's visible and cleanable
 	return d.UpdateSiteStatus(site, "FAILED")
@@ -108,6 +120,27 @@ func (d *DB) MigrateSchema() error {
 		ALTER TABLE sites
 		ADD COLUMN IF NOT EXISTS user_id VARCHAR(36) NULL DEFAULT NULL
 	`)
+	if err != nil {
+		return err
+	}
+	_, err = d.conn.Exec(`
+		ALTER TABLE sites
+		ADD COLUMN IF NOT EXISTS site_type VARCHAR(20) NOT NULL DEFAULT 'wordpress'
+	`)
+	if err != nil {
+		return err
+	}
+	_, err = d.conn.Exec(`
+		ALTER TABLE sites
+		ADD COLUMN IF NOT EXISTS encryption_key VARCHAR(255) NULL DEFAULT NULL
+	`)
+	if err != nil {
+		return err
+	}
+	_, err = d.conn.Exec(`
+		ALTER TABLE sites
+		ADD COLUMN IF NOT EXISTS db_password VARCHAR(255) NULL DEFAULT NULL
+	`)
 	return err
 }
 
@@ -122,9 +155,13 @@ func (d *DB) GetSite(site string) (*Site, error) {
 	var s Site
 	var lastBackup sql.NullTime
 	err := d.conn.QueryRow(`
-        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), COALESCE(user_id,''), created_at, updated_at, last_backup_at
+        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), COALESCE(user_id,''),
+               COALESCE(site_type,'wordpress'), COALESCE(encryption_key,''),
+               created_at, updated_at, last_backup_at
         FROM sites WHERE site=?
-    `, site).Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.UserID, &s.CreatedAt, &s.UpdatedAt, &lastBackup)
+    `, site).Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.UserID,
+		&s.SiteType, &s.EncryptionKey,
+		&s.CreatedAt, &s.UpdatedAt, &lastBackup)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +173,9 @@ func (d *DB) GetSite(site string) (*Site, error) {
 
 func (d *DB) ListSites() ([]Site, error) {
 	rows, err := d.conn.Query(`
-        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), COALESCE(user_id,''), created_at, updated_at, last_backup_at
+        SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), COALESCE(user_id,''),
+               COALESCE(site_type,'wordpress'), COALESCE(encryption_key,''),
+               created_at, updated_at, last_backup_at
         FROM sites ORDER BY created_at DESC
     `)
 	if err != nil {
@@ -148,7 +187,9 @@ func (d *DB) ListSites() ([]Site, error) {
 	for rows.Next() {
 		var s Site
 		var lastBackup sql.NullTime
-		if err := rows.Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.UserID, &s.CreatedAt, &s.UpdatedAt, &lastBackup); err != nil {
+		if err := rows.Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.UserID,
+			&s.SiteType, &s.EncryptionKey,
+			&s.CreatedAt, &s.UpdatedAt, &lastBackup); err != nil {
 			return nil, err
 		}
 		if lastBackup.Valid {
@@ -200,13 +241,17 @@ func (d *DB) InsertJob(id string, jobType JobType, site string) error {
 	return err
 }
 
-// InsertSite creates or updates the site record
-func (d *DB) UpsertSite(site, domain, status, jobID, userID string) error {
+// UpsertSite creates or updates the site record.
+// siteType should be "wordpress", "static", or "n8n".
+func (d *DB) UpsertSite(site, domain, status, jobID, userID, siteType string) error {
+	if siteType == "" {
+		siteType = "wordpress"
+	}
 	_, err := d.conn.Exec(`
-        INSERT INTO sites (site, domain, status, job_id, user_id)
-        VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE status=VALUES(status), job_id=VALUES(job_id), user_id=VALUES(user_id), updated_at=NOW()
-    `, site, domain, status, jobID, userID)
+        INSERT INTO sites (site, domain, status, job_id, user_id, site_type)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE status=VALUES(status), job_id=VALUES(job_id), user_id=VALUES(user_id), site_type=VALUES(site_type), updated_at=NOW()
+    `, site, domain, status, jobID, userID, siteType)
 	return err
 }
 
@@ -278,7 +323,7 @@ func (d *DB) CompleteJob(jobID, site string, jobType JobType) error {
 	}
 
 	finalSiteStatus := "ACTIVE"
-	if jobType == JobDestroy {
+	if jobType == JobDestroy || jobType == JobN8nDestroy {
 		finalSiteStatus = "DESTROYED"
 	}
 	return d.UpdateSiteStatus(site, finalSiteStatus)
@@ -420,6 +465,45 @@ func (d *DB) GetPGLastBackupAt(name string) (*time.Time, string, error) {
 		key = lastKey.String
 	}
 	return t, key, nil
+}
+
+func (d *DB) SetEncryptionKey(site, key string) error {
+	_, err := d.conn.Exec(`
+		UPDATE sites SET encryption_key=?, updated_at=NOW() WHERE site=?
+	`, key, site)
+	return err
+}
+
+func (d *DB) GetEncryptionKey(site string) (string, error) {
+	var key sql.NullString
+	err := d.conn.QueryRow(`SELECT encryption_key FROM sites WHERE site=?`, site).Scan(&key)
+	if err != nil {
+		return "", err
+	}
+	if key.Valid {
+		return key.String, nil
+	}
+	return "", nil
+}
+
+// SetDBPassword persists the random per-site n8n Postgres password (n8n only).
+func (d *DB) SetDBPassword(site, pass string) error {
+	_, err := d.conn.Exec(`
+		UPDATE sites SET db_password=?, updated_at=NOW() WHERE site=?
+	`, pass, site)
+	return err
+}
+
+func (d *DB) GetDBPassword(site string) (string, error) {
+	var pass sql.NullString
+	err := d.conn.QueryRow(`SELECT db_password FROM sites WHERE site=?`, site).Scan(&pass)
+	if err != nil {
+		return "", err
+	}
+	if pass.Valid {
+		return pass.String, nil
+	}
+	return "", nil
 }
 
 // ListCustomDomains returns all active custom domain values from the sites table.

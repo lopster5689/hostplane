@@ -22,6 +22,11 @@ func TestNaming(t *testing.T) {
 		{"CaddyConfFile", CaddyConfFile("mysite"), "mysite.caddy"},
 		{"NginxContainerName", NginxContainerName("mysite"), "nginx_mysite"},
 		{"NginxConfFile", NginxConfFile("mysite"), "mysite.conf"},
+		{"N8nContainerName", N8nContainerName("mysite"), "n8n_mysite"},
+		{"N8nContainerName/digits", N8nContainerName("auto42"), "n8n_auto42"},
+		{"N8nVolumeName", N8nVolumeName("mysite"), "n8n_mysite"},
+		{"N8nDatabaseName", N8nDatabaseName("mysite"), "n8n_mysite"},
+		{"N8nDatabaseUser", N8nDatabaseUser("mysite"), "n8n_mysite"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

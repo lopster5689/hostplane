@@ -155,7 +155,7 @@ No DNS changes. No Caddy container restarts. No volume remounts. Each step is is
 Build and deploy:
 
 ```bash
-cd /home/oni/hostplane
+cd /home/oni/hosto/hostplane
 go build -o control-plane .
 cp control-plane /opt/control/control-plane
 systemctl restart control-plane
@@ -229,12 +229,20 @@ What is still missing from architecture:
 
 ## Outstanding Work
 
-- [ ] Custom domain flow — customer adds CNAME, control plane writes extra Caddy block
-- [ ] Site destroy via control plane (containers, volume, DB, config files, compose cleanup)
-- [ ] Static site support (non-WordPress) — nginx sidecar serves from its own volume
+> Shipped items have moved to `ARCHITECTURE.md` Section 25. This list only tracks gaps that are still open.
+
 - [ ] HTTPS health check endpoint per site
-- [ ] Remove old cloudflared config once confirmed fully decommissioned
+- [ ] Remove cloudflared YAML config and `TunnelManager` wiring from `main.go` (currently dormant — see ARCHITECTURE.md §24 "Legacy Code")
 - [ ] Define capacity model for app-01 (max sites from CPU/RAM/PID budget)
 - [ ] Add per-plan resource profiles (small/medium/large) for php/nginx limits
 - [ ] Add admission control: reject/shed new provisions when host headroom is below threshold
+- [ ] Static-site destroy (only WordPress destroy is implemented today)
 - [ ] Decide whether Hostplane should also orchestrate lifecycle/backup for ***REMOVED*** frontend/backend containers
+
+### Shipped since this document was written
+
+- ✅ Custom domain flow — `POST /api/sites/:site/domain` (see ARCHITECTURE.md §10)
+- ✅ WordPress site destroy — `POST /api/destroy` (see ARCHITECTURE.md §9)
+- ✅ Static site provisioning — `POST /api/static/provision` (see ARCHITECTURE.md §8)
+- ✅ Per-site, infra, and PostgreSQL backups — `POST /api/sites/:site/backup` etc. (see ARCHITECTURE.md §13)
+- ✅ Structured WP-CLI execution — `POST /api/sites/:site/wp-exec` (see ARCHITECTURE.md §27)

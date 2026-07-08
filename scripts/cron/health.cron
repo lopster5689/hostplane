@@ -1,0 +1,10 @@
+# Hostplane health probe — drop into /etc/cron.d/ on control-01.
+# Runs every 10 minutes. Output appended to /var/log/hostplane-health.log
+# and tagged into journal (cron's default) so Telegram/Prometheus alerting
+# can hook on non-zero exits.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+*/10 * * * * root /opt/control/scripts/health.sh >> /var/log/hostplane-health.log 2>&1

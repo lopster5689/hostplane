@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var validSite = regexp.MustCompile(`^[a-z0-9]+$`)
@@ -215,46 +216,36 @@ func (a *API) handleRemoveCustomDomain(c *gin.Context) {
 	})
 }
 
-// isWordPressSite returns true if the site was provisioned as a WordPress site
-// (as opposed to a static site). Used to gate nginx and wp_options updates.
+// isWordPressSite returns true if the site was provisioned as a WordPress site.
+// Used to gate nginx and wp_options updates in custom domain handlers.
 func (a *API) isWordPressSite(s *Site) bool {
-	if s.JobID == "" {
-		return true // assume WP when no job record available
-	}
-	job, err := a.db.GetJob(s.JobID)
-	if err != nil {
-		return true // safe default
-	}
-	return job.Type == JobProvision
+	return s.SiteType == "" || s.SiteType == "wordpress"
 }
 
 func (a *API) regenerateCaddy(site, defaultDomain, customDomain string) error {
-	// Check job type to determine Caddy config format
 	existing, err := a.db.GetSite(site)
 	if err != nil {
 		return err
 	}
 
-	job, err := a.db.GetJob(existing.JobID)
-	if err != nil {
-		return err
-	}
-
-	if job.Type == JobStaticProvision {
+	switch existing.SiteType {
+	case "n8n":
+		np := NewN8nProvisioner(a.docker, a.cfg, a.db)
+		if err := np.writeCaddyConfig(site, N8nContainerName(site), defaultDomain, customDomain); err != nil {
+			return err
+		}
+	case "static":
 		sp := NewStaticProvisioner(a.docker, a.cfg)
 		if err := sp.writeCaddyConfig(site, defaultDomain, customDomain); err != nil {
 			return err
 		}
-	} else {
+	default:
 		p := NewProvisioner(a.docker, a.cfg)
 		if err := p.writeCaddyConfig(site, NginxContainerName(site), defaultDomain, customDomain); err != nil {
 			return err
 		}
 	}
 
-	// Always reload Caddy after writing the snippet so the running config
-	// matches disk immediately. Without this, domain changes are invisible
-	// to Caddy until the next unrelated reload.
 	return reloadCaddy(a.cfg)
 }
 
@@ -319,7 +310,7 @@ func (a *API) handleStaticProvision(c *gin.Context) {
 		return
 	}
 
-	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID, userID); err != nil {
+	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID, userID, "static"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record site"})
 		return
 	}
@@ -338,7 +329,95 @@ func (a *API) handleStaticProvision(c *gin.Context) {
 	})
 }
 
+// POST /api/static/update
+//
+// Re-deploys a new zip onto an already-provisioned static site. The site must
+// exist, be of type "static", and be ACTIVE. The files are swapped in place by
+// the worker (JobStaticUpdate); the Caddy config and custom domain are left
+// untouched.
+func (a *API) handleStaticUpdate(c *gin.Context) {
+	site := strings.ToLower(c.PostForm("site"))
+	if site == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "site is required"})
+		return
+	}
+	if !validSite.MatchString(site) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "site name must be lowercase letters and numbers only"})
+		return
+	}
+
+	// Site must already exist, be static, and be active.
+	existingSite, err := a.db.GetSite(site)
+	if err != nil && err != sql.ErrNoRows {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check site status"})
+		return
+	}
+	if existingSite == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "site not found"})
+		return
+	}
+	if existingSite.SiteType != "static" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only static sites can be updated by zip upload"})
+		return
+	}
+	if existingSite.Status != "ACTIVE" {
+		c.JSON(http.StatusConflict, gin.H{"error": "site is not active; cannot update"})
+		return
+	}
+
+	// Reject if site already has an in-flight job.
+	active, err := a.db.HasActiveJob(site)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check job status"})
+		return
+	}
+	if active {
+		c.JSON(http.StatusConflict, gin.H{"error": "site already has a pending or processing job"})
+		return
+	}
+
+	file, err := c.FormFile("zip")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "zip file is required"})
+		return
+	}
+
+	// Use a distinct temp path so an update never clobbers a provision zip.
+	tmpPath := "/tmp/" + site + "_update.zip"
+	if err := c.SaveUploadedFile(file, tmpPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save zip"})
+		return
+	}
+
+	jobID := uuid.New().String()
+	if err := a.db.InsertJob(jobID, JobStaticUpdate, site); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to queue job"})
+		return
+	}
+	if err := a.db.SetJobPayload(jobID, tmpPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store payload"})
+		return
+	}
+	// Intentionally leave the site ACTIVE: the live files are untouched until
+	// RunUpdate swaps the new ones in on success, so the site keeps serving the
+	// old content throughout. In-flight updates are guarded by HasActiveJob, and
+	// a failed update therefore leaves the site ACTIVE (retryable) rather than
+	// stuck in a transient state.
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"job_id": jobID,
+		"site":   site,
+		"domain": existingSite.Domain,
+		"status": "PENDING",
+	})
+}
+
 func (a *API) RegisterRoutes(r *gin.Engine) {
+	// /metrics is registered BEFORE the auth middleware so Prometheus can scrape
+	// without an API key. Filter publicly via Caddy if you do not want the
+	// metrics endpoint exposed on the public hostname.
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 	r.Use(a.authMiddleware())
 
 	v1 := r.Group("/api")
@@ -352,6 +431,8 @@ func (a *API) RegisterRoutes(r *gin.Engine) {
 		v1.DELETE("/sites/:site", a.handleDeleteSite)
 		v1.DELETE("/jobs/:id", a.handleDeleteJob)
 		v1.POST("/static/provision", a.handleStaticProvision)
+		v1.POST("/static/update", a.handleStaticUpdate)
+		v1.POST("/n8n/provision", a.handleN8nProvision)
 		v1.POST("/sites/:site/domain", a.handleSetCustomDomain)
 		v1.DELETE("/sites/:site/domain", a.handleRemoveCustomDomain)
 		v1.GET("/sites/:site/domain/status", a.handleDomainStatus)
@@ -525,7 +606,77 @@ func (a *API) handleProvision(c *gin.Context) {
 		return
 	}
 
-	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID, req.UserID); err != nil {
+	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID, req.UserID, "wordpress"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record site"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"job_id": jobID,
+		"site":   site,
+		"domain": domain,
+		"status": "PENDING",
+	})
+}
+
+// POST /api/n8n/provision
+func (a *API) handleN8nProvision(c *gin.Context) {
+	var req struct {
+		Site   string `json:"site" binding:"required"`
+		UserID string `json:"user_id" binding:"required"`
+		Plan   string `json:"plan"` // "starter" (default), "business", "scale"
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "site and user_id are required"})
+		return
+	}
+
+	site := strings.ToLower(req.Site)
+
+	if !validSite.MatchString(site) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "site name must be lowercase letters and numbers only"})
+		return
+	}
+
+	active, err := a.db.HasActiveJob(site)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check job status"})
+		return
+	}
+	if active {
+		c.JSON(http.StatusConflict, gin.H{"error": "site already has a pending or processing job"})
+		return
+	}
+
+	existing, err := a.db.GetSite(site)
+	if err != nil && err != sql.ErrNoRows {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check site status"})
+		return
+	}
+	if existing != nil && existing.Status == "ACTIVE" {
+		c.JSON(http.StatusConflict, gin.H{"error": "site already exists and is active"})
+		return
+	}
+
+	jobID := uuid.New().String()
+	domain := SiteDomain(site, a.cfg.BaseDomain)
+
+	if err := a.db.InsertJob(jobID, JobN8nProvision, site); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to queue job"})
+		return
+	}
+
+	// carry the plan tier to the worker via the job payload (default cheapest)
+	plan := req.Plan
+	if plan == "" {
+		plan = "starter"
+	}
+	if err := a.db.SetJobPayload(jobID, plan); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record plan"})
+		return
+	}
+
+	if err := a.db.UpsertSite(site, domain, "PROVISIONING", jobID, req.UserID, "n8n"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record site"})
 		return
 	}
@@ -637,12 +788,17 @@ func (a *API) handleDestroy(c *gin.Context) {
 
 	jobID := uuid.New().String()
 
-	if err := a.db.InsertJob(jobID, JobDestroy, site); err != nil {
+	destroyJobType := JobDestroy
+	if existing.SiteType == "n8n" {
+		destroyJobType = JobN8nDestroy
+	}
+
+	if err := a.db.InsertJob(jobID, destroyJobType, site); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to queue job"})
 		return
 	}
 
-	if err := a.db.UpsertSite(site, existing.Domain, "DESTROYING", jobID, existing.UserID); err != nil {
+	if err := a.db.UpsertSite(site, existing.Domain, "DESTROYING", jobID, existing.UserID, existing.SiteType); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update site status"})
 		return
 	}
@@ -730,6 +886,7 @@ func (a *API) handleSiteStatus(c *gin.Context) {
 		"domain":         s.Domain,
 		"custom_domain":  s.CustomDomain,
 		"status":         s.Status,
+		"site_type":      s.SiteType,
 		"cert_status":    certStatus,
 		"warnings":       warnings,
 		"job_id":         s.JobID,

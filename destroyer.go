@@ -22,7 +22,7 @@ func NewDestroyer(docker *client.Client, cfg Config, backupper *Backupper) *Dest
 	return &Destroyer{docker: docker, cfg: cfg, backupper: backupper}
 }
 
-func (d *Destroyer) Run(site string) error {
+func (d *Destroyer) Run(site, siteType string) error {
 	// ── Pre-destroy safety backup ─────────────────────────────────
 	// Enabled by default. Set REQUIRE_BACKUP_BEFORE_DESTROY=false to skip
 	// during development / debugging when R2 is not yet configured.
@@ -34,13 +34,23 @@ func (d *Destroyer) Run(site string) error {
 		log.Printf("[destroyer] site=%s REQUIRE_BACKUP_BEFORE_DESTROY=false — skipping pre-destroy backup", site)
 	}
 
+	switch siteType {
+	case "n8n":
+		return d.destroyN8n(site)
+	case "static":
+		return d.destroyStatic(site)
+	default:
+		return d.destroyWordPress(site)
+	}
+}
+
+func (d *Destroyer) destroyWordPress(site string) error {
 	dbName := WPDatabaseName(site)
 	dbUser := WPDatabaseUser(site)
 	volumeName := VolumeName(site)
 	phpName := PHPContainerName(site)
 	nginxName := NginxContainerName(site)
 
-	// Stop and remove both containers before touching the shared volume
 	if err := d.removeContainer(phpName); err != nil {
 		return fmt.Errorf("removePhpContainer: %w", err)
 	}
@@ -60,6 +70,39 @@ func (d *Destroyer) Run(site string) error {
 		return fmt.Errorf("dropDatabase: %w", err)
 	}
 	return nil
+}
+
+func (d *Destroyer) destroyN8n(site string) error {
+	containerName := N8nContainerName(site)
+	volumeName := N8nVolumeName(site)
+	dbName := N8nDatabaseName(site)
+	dbUser := N8nDatabaseUser(site)
+
+	if err := d.removeContainer(containerName); err != nil {
+		return fmt.Errorf("removeN8nContainer: %w", err)
+	}
+	if err := d.removeVolume(volumeName); err != nil {
+		return fmt.Errorf("removeVolume: %w", err)
+	}
+	if err := d.removeCaddyConfig(site); err != nil {
+		return fmt.Errorf("removeCaddyConfig: %w", err)
+	}
+	if err := reloadCaddy(d.cfg); err != nil {
+		return fmt.Errorf("reloadCaddy: %w", err)
+	}
+	// n8n uses PostgreSQL — drop via ephemeral psql container
+	np := NewN8nProvisioner(d.docker, d.cfg, nil)
+	np.dropPGDatabase(dbName, dbUser)
+	return nil
+}
+
+func (d *Destroyer) destroyStatic(site string) error {
+	sp := NewStaticProvisioner(d.docker, d.cfg)
+	sp.removeStaticSiteFiles(site)
+	if err := d.removeCaddyConfig(site); err != nil {
+		return fmt.Errorf("removeCaddyConfig: %w", err)
+	}
+	return reloadCaddy(d.cfg)
 }
 
 func (d *Destroyer) removeContainer(phpName string) error {

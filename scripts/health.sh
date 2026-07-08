@@ -252,7 +252,123 @@ else
   done <<< "$ACTIVE_SITES"
 fi
 
-# ── 6. Summary ────────────────────────────────────────────────
+# ── 7. Backup freshness ───────────────────────────────────────
+echo ""
+echo "[ BACKUP FRESHNESS ]"
+
+# Per-site backups (sites.last_backup_at) — fail if any ACTIVE site is >36h stale.
+STALE_SITES=$($MYSQL "
+  SELECT site, IFNULL(last_backup_at,'NEVER')
+  FROM sites
+  WHERE status IN ('ACTIVE','DOMAIN_ACTIVE')
+    AND (last_backup_at IS NULL OR last_backup_at < NOW() - INTERVAL 36 HOUR);
+" 2>/dev/null)
+if [ -z "$STALE_SITES" ]; then
+  pass "All ACTIVE sites have backup within 36h"
+else
+  while IFS=$'\t' read -r site ts; do
+    [ -z "$site" ] && continue
+    fail "site $site last_backup_at=$ts (>36h or NEVER)"
+  done <<< "$STALE_SITES"
+fi
+
+# PG backup freshness (pg_backup_meta.last_backup_at) — fail if >30h stale.
+# Name in pg_backup_meta comes from POSTGRES_DSN, so we don't hard-code 'hosto'
+# — just take the most recent row in the table.
+PG_ROW=$($MYSQL "SELECT name, IFNULL(last_backup_at,'NEVER') FROM pg_backup_meta ORDER BY last_backup_at DESC LIMIT 1;" 2>/dev/null)
+if [ -z "$PG_ROW" ]; then
+  fail "pg_backup_meta empty — no PG backup ever recorded"
+else
+  PG_NAME=$(echo "$PG_ROW" | awk '{print $1}')
+  PG_LAST=$(echo "$PG_ROW" | cut -f2-)
+  if [ "$PG_LAST" = "NEVER" ]; then
+    fail "PG ($PG_NAME) — last_backup_at is NULL"
+  else
+    PG_AGE_OK=$($MYSQL "SELECT last_backup_at >= NOW() - INTERVAL 30 HOUR FROM pg_backup_meta WHERE name='$PG_NAME';" 2>/dev/null)
+    if [ "$PG_AGE_OK" = "1" ]; then
+      pass "PG ($PG_NAME) backup at $PG_LAST (<30h)"
+    else
+      fail "PG ($PG_NAME) backup at $PG_LAST (>30h)"
+    fi
+  fi
+fi
+
+# Infra DB freshness — list R2 if aws CLI + R2 creds are available; skip otherwise.
+R2_ACCESS_KEY=$(grep '^R2_ACCESS_KEY_ID' /opt/control/.env 2>/dev/null | cut -d= -f2-)
+R2_ACCOUNT_ID=$(grep '^R2_ACCOUNT_ID' /opt/control/.env 2>/dev/null | cut -d= -f2-)
+R2_BUCKET=$(grep '^R2_BUCKET' /opt/control/.env 2>/dev/null | cut -d= -f2-)
+R2_BUCKET="${R2_BUCKET:-hostplane-backups}"
+if command -v aws >/dev/null 2>&1 && [ -n "$R2_ACCESS_KEY" ] && [ -n "$R2_ACCOUNT_ID" ]; then
+  R2_SECRET_KEY=$(grep '^R2_SECRET_ACCESS_KEY' /opt/control/.env 2>/dev/null | cut -d= -f2-)
+  LATEST=$(AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$R2_SECRET_KEY" \
+    aws s3api list-objects-v2 \
+    --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+    --bucket "$R2_BUCKET" --prefix "infra/controlplane/" \
+    --query "sort_by(Contents,&LastModified)[-1].LastModified" --output text 2>/dev/null)
+  if [ -n "$LATEST" ] && [ "$LATEST" != "None" ]; then
+    AGE_SEC=$(( $(date -u +%s) - $(date -u -d "$LATEST" +%s) ))
+    if [ "$AGE_SEC" -lt 7200 ]; then
+      pass "Infra DB backup ${AGE_SEC}s old (<2h)"
+    else
+      fail "Infra DB backup ${AGE_SEC}s old (>2h)"
+    fi
+  else
+    fail "Could not list infra/controlplane/ in R2"
+  fi
+else
+  warn "Infra DB freshness check skipped (aws CLI or R2 creds not available)"
+fi
+
+# ── 8. Legacy cloudflared decommissioned ──────────────────────
+echo ""
+echo "[ LEGACY CLOUDFLARED ]"
+if systemctl list-unit-files cloudflared.service >/dev/null 2>&1; then
+  if systemctl is-active --quiet cloudflared; then
+    fail "cloudflared.service is ACTIVE — legacy tunnel should be decommissioned (ARCHITECTURE.md §24)"
+  else
+    pass "cloudflared.service installed but inactive (expected)"
+  fi
+else
+  pass "cloudflared.service not installed (expected post-migration)"
+fi
+
+# ── 9. Caddy ACME storage size ───────────────────────────────
+# Runaway ACME issuance loops can fill /data; a healthy stack stays well under 500MB.
+echo ""
+echo "[ CADDY ACME STORAGE ]"
+CADDY_DATA_MB=$($DOCKER exec caddy du -sm /data 2>/dev/null | awk '{print $1}')
+if [ -z "$CADDY_DATA_MB" ]; then
+  warn "could not measure /data inside caddy container"
+elif [ "$CADDY_DATA_MB" -lt 500 ]; then
+  pass "caddy /data = ${CADDY_DATA_MB} MB (<500 MB)"
+else
+  fail "caddy /data = ${CADDY_DATA_MB} MB — possible runaway issuance"
+fi
+
+# ── 10. Job queue health (bulk) ──────────────────────────────
+# Per-job checks already happen in section 2; this is the system-wide guardrail.
+echo ""
+echo "[ JOB QUEUE BULK ]"
+INFLIGHT=$($MYSQL "SELECT COUNT(*) FROM jobs WHERE status='PROCESSING';")
+if [ "$INFLIGHT" -le 5 ] 2>/dev/null; then
+  pass "$INFLIGHT job(s) in PROCESSING (<=5)"
+else
+  warn "$INFLIGHT job(s) in PROCESSING (>5) — unusual concurrency"
+fi
+
+# ARCHITECTURE.md §25 known bug: worker never marks exhausted jobs FAILED.
+# These rows are jobs that have hit max_attempts but the SQL claim filter
+# WHERE attempts < max_attempts prevents them from being re-claimed, so they
+# stay PENDING forever. Until the bug is fixed this check should always be 0;
+# once it's fixed, FAILED jobs will appear in the existing FAILED_JOBS warn.
+EXHAUSTED=$($MYSQL "SELECT COUNT(*) FROM jobs WHERE status='PENDING' AND attempts>=max_attempts;")
+if [ "$EXHAUSTED" = "0" ]; then
+  pass "No exhausted-but-still-PENDING jobs"
+else
+  fail "$EXHAUSTED exhausted job(s) stuck in PENDING — worker FailJob path is broken (ARCHITECTURE.md §25)"
+fi
+
+# ── Summary ───────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 TOTAL_SITES=$($MYSQL "SELECT COUNT(*) FROM sites WHERE status='ACTIVE';")

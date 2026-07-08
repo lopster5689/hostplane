@@ -48,3 +48,23 @@ func NginxContainerName(site string) string {
 func NginxConfFile(site string) string {
 	return site + ".conf"
 }
+
+// N8nContainerName returns the Docker container name for an n8n site.
+func N8nContainerName(site string) string {
+	return "n8n_" + site
+}
+
+// N8nVolumeName returns the Docker volume name for an n8n site.
+func N8nVolumeName(site string) string {
+	return "n8n_" + site
+}
+
+// N8nDatabaseName returns the PostgreSQL database name for an n8n site.
+func N8nDatabaseName(site string) string {
+	return "n8n_" + site
+}
+
+// N8nDatabaseUser returns the PostgreSQL user name for an n8n site.
+func N8nDatabaseUser(site string) string {
+	return "n8n_" + site
+}

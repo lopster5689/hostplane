@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -66,10 +67,11 @@ func main() {
 	tunnel := NewTunnelManager(cfg)
 	provisioner := NewProvisioner(docker, cfg)
 	staticProvisioner := NewStaticProvisioner(docker, cfg)
+	n8nProvisioner := NewN8nProvisioner(docker, cfg, db)
 	backupper := NewBackupper(docker, cfg, r2, db)
 	pgBackupper := NewPGBackupper(docker, cfg, r2, db)
 	destroyer := NewDestroyer(docker, cfg, backupper)
-	worker := NewWorker(db, provisioner, destroyer, staticProvisioner, cfg)
+	worker := NewWorker(db, provisioner, destroyer, staticProvisioner, n8nProvisioner, cfg)
 	go worker.Start()
 	log.Println("[main] worker started")
 
@@ -92,6 +94,9 @@ func main() {
 	router := gin.New()
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
+
+	// Register Prometheus custom collector (queries DB on each scrape).
+	prometheus.MustRegister(newHostplaneCollector(db))
 
 	api := NewAPI(db, cfg, docker, tunnel, backupper, pgBackupper)
 	api.RegisterRoutes(router)
