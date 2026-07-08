@@ -477,7 +477,7 @@ file_put_contents($dir . "/single-product.php", <<<'PRODUCT'
             <h1 class="text-3xl md:text-4xl font-heading font-bold"><?php the_title(); ?></h1>
             <div class="text-2xl text-blue-600 font-bold"><?php echo $product ? $product->get_price_html() : ''; ?></div>
             <div class="prose prose-slate max-w-none"><?php the_content(); ?></div>
-            <div class="mt-2 [&_form.cart]:flex [&_form.cart]:items-center [&_form.cart]:gap-3 [&_.quantity_input]:w-20 [&_.quantity_input]:border [&_.quantity_input]:border-slate-200 [&_.quantity_input]:rounded-lg [&_.quantity_input]:px-3 [&_.quantity_input]:py-2 [&_button.single_add_to_cart_button]:bg-emerald-600 [&_button.single_add_to_cart_button]:text-white [&_button.single_add_to_cart_button]:px-6 [&_button.single_add_to_cart_button]:py-3 [&_button.single_add_to_cart_button]:rounded-lg [&_button.single_add_to_cart_button]:font-semibold">
+            <div class="mt-2 [&_form.cart]:flex [&_form.cart]:items-center [&_form.cart]:gap-3 [&_.quantity_input]:w-20 [&_.quantity_input]:border [&_.quantity_input]:border-slate-200 [&_.quantity_input]:rounded-lg [&_.quantity_input]:px-3 [&_.quantity_input]:py-2 [&_form.cart_button]:bg-emerald-600 [&_form.cart_button]:text-white [&_form.cart_button]:px-6 [&_form.cart_button]:py-3 [&_form.cart_button]:rounded-lg [&_form.cart_button]:font-semibold [&_form.cart_button]:border-0 [&_form.cart_button]:cursor-pointer">
                 <?php if ($product) { woocommerce_template_single_add_to_cart(); } ?>
             </div>
         </div>
