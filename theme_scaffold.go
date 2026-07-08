@@ -253,8 +253,8 @@ h1, h2, h3, h4, h5, h6 {
 .woocommerce table.shop_table img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
 .woocommerce a.button, .woocommerce button.button, .woocommerce input.button, .woocommerce #place_order { background: var(--color-primary); color: #ffffff; border: 0; border-radius: 8px; padding: 12px 20px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
 .woocommerce a.button:hover, .woocommerce button.button:hover, .woocommerce input.button:hover, .woocommerce #place_order:hover { background: var(--color-primary-hover); color: #ffffff; }
-.woocommerce a.checkout-button { background: var(--color-secondary); }
-.woocommerce a.checkout-button:hover { background: var(--color-secondary-hover); }
+.woocommerce a.button.alt, .woocommerce button.button.alt, .woocommerce input.button.alt, .woocommerce a.checkout-button { background: var(--color-secondary); color: #ffffff; }
+.woocommerce a.button.alt:hover, .woocommerce button.button.alt:hover, .woocommerce input.button.alt:hover, .woocommerce a.checkout-button:hover { background: var(--color-secondary-hover); color: #ffffff; }
 .woocommerce input.input-text, .woocommerce select, .woocommerce textarea { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; width: 100%; background: var(--color-card); font-family: var(--font-body); }
 .woocommerce form .form-row { margin-bottom: 14px; }
 .woocommerce form .form-row label { display: block; margin-bottom: 4px; font-size: 0.85rem; color: var(--color-muted); }
