@@ -138,3 +138,29 @@ func TestValidateWCPrice(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateHomeSections(t *testing.T) {
+	good := `[{"type":"hero_image","image_id":42,"headline":"Fresh Daily","sub":"Baked at 5am"},
+	{"type":"story","title":"Our Craft","text":"We bake."},
+	{"type":"bestsellers","title":"Favorites"},
+	{"type":"hours_location","hours":["Mon-Sat 8-6"],"address":"12 MG Road","phone":"+91 98x"},
+	{"type":"offer_banner","text":"Free delivery over 500"}]`
+	norm, err := validateHomeSections(good)
+	if err != nil || !strings.Contains(norm, "hero_image") {
+		t.Fatalf("valid sections rejected: %v", err)
+	}
+	bad := []string{
+		`[]`, // empty
+		`[{"type":"marquee"}]`,                                  // unknown type
+		`[{"type":"hero_image","headline":"x"}]`,                // hero without image
+		`[{"type":"story","title":"x"}]`,                        // story without text
+		`[{"type":"gallery","image_ids":[1]}]`,                  // gallery too small
+		`[{"type":"offer_banner"}]`,                             // banner without text
+		`not json`,
+	}
+	for _, b := range bad {
+		if _, err := validateHomeSections(b); err == nil {
+			t.Errorf("expected rejection for %s", b)
+		}
+	}
+}

@@ -1476,8 +1476,9 @@ func (a *API) handleWPExec(c *gin.Context) {
 		"write_theme_file": a.handleWriteThemeFileGated,
 		"edit_theme_file":  a.handleEditThemeFile,
 		"verify_page":      a.handleVerifyPage,
-		"verify_store":     a.handleVerifyStore,
-		"prepare_store":    a.handlePrepareStore,
+		"verify_store":      a.handleVerifyStore,
+		"prepare_store":     a.handlePrepareStore,
+		"set_home_sections": a.handleSetHomeSections,
 	}[req.Tool]; ok {
 		output, exitCode, err := handler(site, req.Params)
 		if err != nil {
