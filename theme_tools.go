@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,6 +111,22 @@ func (a *API) handleWriteThemeFileGated(site string, params map[string]string) (
 	}
 	if len(content) > 65536 {
 		return "", -1, fmt.Errorf("content too large (max 64KB)")
+	}
+
+	// Shrink guard (design-depth D9, open-design stub-guard pattern): a
+	// "small edit" that replaces a rich template with a stub destroys work.
+	// Whole-file writes that shrink an existing file >60% need explicit intent.
+	if params["allow_shrink"] != "true" {
+		sizeOut, _, serr := a.execWPCLI(site, []string{"sh", "-c",
+			"wp eval " + shellQuote(`$p = get_stylesheet_directory() . "/`+filename+`"; echo file_exists($p) ? filesize($p) : 0;`) + " --allow-root 2>/dev/null"})
+		if serr == nil {
+			if oldSize, cerr := strconv.Atoi(strings.TrimSpace(sizeOut)); cerr == nil &&
+				oldSize > 2048 && len(content)*100 < oldSize*40 {
+				return fmt.Sprintf("REJECTED (shrink guard): %s is %d bytes and this write is only %d bytes (<40%%). "+
+					"If you meant a small change, use edit_theme_file (search/replace). If you truly intend to replace "+
+					"the whole file with something smaller, retry with allow_shrink=true.", filename, oldSize, len(content)), 1, nil
+			}
+		}
 	}
 
 	tmp := "/tmp/wtf_stage.php"
@@ -254,6 +271,7 @@ func verifyPageChecks(body, status string, expect, expectAbsent []string) []stri
 //     the default first-post body) — the signal that the front page fell back to the blog;
 //   - optional expect=a,b,c   — every substring MUST be present (product names, a price);
 //   - optional expect_absent=x,y — none may be present.
+//
 // Content checks run in Go on the fetched body (not shell-grep), so caller-supplied
 // expect strings can't inject into a shell command.
 // fetchSitePage fetches a path through the site's own nginx container,
