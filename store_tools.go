@@ -104,6 +104,9 @@ const storeStatePHP = `
 	$out['default_page'] = $sample && $sample->post_status === 'publish';
 	$out['wc'] = class_exists('WooCommerce');
 	$out['our_theme'] = file_exists(get_stylesheet_directory() . '/.hostplane-scaffold');
+	$out['home_sections'] = (string) get_option('hostplane_home_sections', '');
+	$css = @file_get_contents(get_stylesheet_directory() . '/style.css');
+	$out['style_css'] = $css === false ? '' : substr($css, 0, 8192);
 	$out['products'] = array();
 	$out['shop_page'] = 0; $out['shop_status'] = ''; $out['shop_path'] = ''; $out['product_path'] = '';
 	if ($out['wc']) {
@@ -139,9 +142,11 @@ type storeState struct {
 	Permalinks  string          `json:"permalinks"`
 	DefaultPost bool            `json:"default_post"`
 	DefaultPage bool            `json:"default_page"`
-	WC          bool            `json:"wc"`
-	OurTheme    bool            `json:"our_theme"`
-	ShopPageID  int             `json:"shop_page"`
+	WC           bool   `json:"wc"`
+	OurTheme     bool   `json:"our_theme"`
+	HomeSections string `json:"home_sections"`
+	StyleCSS     string `json:"style_css"`
+	ShopPageID   int    `json:"shop_page"`
 	ShopStatus  string          `json:"shop_status"`
 	ShopPath    string          `json:"shop_path"`
 	ProductPath string          `json:"product_path"`
@@ -223,6 +228,67 @@ func storeChecks(st storeState, expectCurrency string, expectProducts []storePro
 	return fails
 }
 
+// briefTokens is the design contract verify_store asserts (design-depth D4):
+// the values the user approved at start_job must be the values the live theme
+// actually declares.
+type briefTokens struct {
+	Primary   string `json:"primary_color"`
+	Secondary string `json:"secondary_color"`
+	Accent    string `json:"accent_color"`
+}
+
+// slopHexes: palette values that read as "no one designed this" (open-design's
+// anti-slop linter tells). Presence in a scaffolded theme's style.css fails
+// design acceptance regardless of the brief.
+var slopHexes = []string{"#6366f1", "#7c3aed", "#8b5cf6"}
+
+// designChecks computes design-acceptance failures (pure, unit-tested). Only
+// runs when the job carried a design brief (tokensJSON non-empty) — a plain
+// content job is never failed on design. Section checks apply to scaffolded
+// themes, where set_home_sections is available by construction.
+func designChecks(st storeState, tokensJSON string) []string {
+	if tokensJSON == "" || tokensJSON == "{}" {
+		return nil
+	}
+	var fails []string
+	var tk briefTokens
+	if err := json.Unmarshal([]byte(tokensJSON), &tk); err != nil {
+		return []string{"design_tokens_unparseable"}
+	}
+	cssLow := strings.ToLower(st.StyleCSS)
+	for name, hex := range map[string]string{"primary": tk.Primary, "secondary": tk.Secondary, "accent": tk.Accent} {
+		if hex == "" {
+			continue
+		}
+		if !strings.Contains(cssLow, "--color-"+name+": "+strings.ToLower(hex)) {
+			fails = append(fails, fmt.Sprintf("design_token_mismatch: --color-%s is not the approved %s (create_theme must receive the brief's exact values)", name, hex))
+		}
+	}
+	for _, bad := range slopHexes {
+		if strings.Contains(cssLow, strings.TrimPrefix(bad, "#")) {
+			fails = append(fails, "design_slop_color: "+bad+" (AI-default indigo/violet family) in style.css")
+		}
+	}
+	if st.OurTheme {
+		var secs []homeSection
+		if st.HomeSections == "" || json.Unmarshal([]byte(st.HomeSections), &secs) != nil || len(secs) < 4 {
+			fails = append(fails, fmt.Sprintf("homepage_too_thin: %d typed sections (need ≥4 via set_home_sections — hero_image + story + bestsellers at minimum)", len(secs)))
+		} else {
+			hasHero := false
+			for _, s := range secs {
+				if s.Type == "hero_image" && s.ImageID > 0 {
+					hasHero = true
+					break
+				}
+			}
+			if !hasHero {
+				fails = append(fails, "homepage_missing_hero_image (generate a wide hero image and lead with a hero_image section)")
+			}
+		}
+	}
+	return fails
+}
+
 // handleVerifyStore runs the full acceptance suite: parse expectations, collect
 // DB facts (Phase A), check them (pure), then render the homepage, shop and one
 // product page through the site's own nginx (Phase B) — the DOM can be right
@@ -262,6 +328,7 @@ func (a *API) handleVerifyStore(site string, params map[string]string) (string, 
 	}
 
 	fails := storeChecks(st, expectCurrency, expectProducts)
+	fails = append(fails, designChecks(st, params["tokens"])...)
 
 	// Phase B: render checks.
 	type renderCheck struct{ path, mustContain string }

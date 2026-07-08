@@ -164,3 +164,39 @@ func TestValidateHomeSections(t *testing.T) {
 		}
 	}
 }
+
+func TestDesignChecks(t *testing.T) {
+	tokens := `{"primary_color":"#9b5b32","secondary_color":"#4c4037","accent_color":"#c98a4b"}`
+	goodCSS := ":root { --color-primary: #9b5b32; --color-secondary: #4c4037; --color-accent: #c98a4b; }"
+	rich := `[{"type":"hero_image","image_id":9,"headline":"x"},{"type":"story","title":"a","text":"b"},{"type":"bestsellers"},{"type":"hours_location","address":"x"}]`
+
+	// Fully-conforming build passes.
+	if fails := designChecks(storeState{OurTheme: true, StyleCSS: goodCSS, HomeSections: rich}, tokens); len(fails) != 0 {
+		t.Errorf("conforming design must pass, got %v", fails)
+	}
+	// No brief -> no design assertions (content-edit jobs unaffected).
+	if fails := designChecks(storeState{OurTheme: true}, ""); fails != nil {
+		t.Errorf("no-brief job must skip design checks, got %v", fails)
+	}
+	// Theme ignored the approved palette -> token mismatch.
+	blueCSS := ":root { --color-primary: #2563eb; --color-secondary: #10b981; --color-accent: #f59e0b; }"
+	fails := designChecks(storeState{OurTheme: true, StyleCSS: blueCSS, HomeSections: rich}, tokens)
+	if len(fails) < 3 || !strings.Contains(strings.Join(fails, " "), "design_token_mismatch") {
+		t.Errorf("ignored brief must fail all three tokens, got %v", fails)
+	}
+	// AI-default indigo anywhere in the css -> slop failure.
+	slop := designChecks(storeState{OurTheme: true, StyleCSS: goodCSS + " .x{color:#6366f1}", HomeSections: rich}, tokens)
+	if !strings.Contains(strings.Join(slop, " "), "design_slop_color") {
+		t.Errorf("slop hex must fail, got %v", slop)
+	}
+	// Thin homepage (legacy 0 sections) and hero-less compositions fail.
+	thin := designChecks(storeState{OurTheme: true, StyleCSS: goodCSS, HomeSections: ""}, tokens)
+	if !strings.Contains(strings.Join(thin, " "), "homepage_too_thin") {
+		t.Errorf("sectionless homepage must fail, got %v", thin)
+	}
+	noHero := `[{"type":"story","title":"a","text":"b"},{"type":"bestsellers"},{"type":"offer_banner","text":"x"},{"type":"category_strip"}]`
+	nh := designChecks(storeState{OurTheme: true, StyleCSS: goodCSS, HomeSections: noHero}, tokens)
+	if !strings.Contains(strings.Join(nh, " "), "homepage_missing_hero_image") {
+		t.Errorf("hero-less homepage must fail, got %v", nh)
+	}
+}
