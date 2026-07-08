@@ -456,11 +456,32 @@ SINGLE
 // ═══════════════════════════════════════════════════════════════
 // single-product.php — WooCommerce product detail
 // ═══════════════════════════════════════════════════════════════
+// Self-contained Tailwind product detail — same rationale as archive-product:
+// wc's content-single-product template depends on WooCommerce CSS the Tailwind
+// preflight strips (rendered as an unstyled floating column). The add-to-cart
+// form is wc's own (cart/variations keep working); arbitrary-variant classes
+// style it without wc CSS.
 file_put_contents($dir . "/single-product.php", <<<'PRODUCT'
 <?php get_header(); ?>
 <main class="max-w-7xl mx-auto px-4 md:px-6 py-12">
-    <?php while (have_posts()) : the_post(); ?>
-        <?php wc_get_template_part('content', 'single-product'); ?>
+    <?php while (have_posts()) : the_post(); global $product; if (!($product instanceof WC_Product) && function_exists('wc_get_product')) { $product = wc_get_product(get_the_ID()); } ?>
+    <div class="grid md:grid-cols-2 gap-10 items-start">
+        <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+            <?php if (has_post_thumbnail()): ?>
+                <?php the_post_thumbnail('large', array('class' => 'w-full h-auto object-cover')); ?>
+            <?php else: ?>
+                <div class="aspect-square bg-slate-100"></div>
+            <?php endif; ?>
+        </div>
+        <div class="flex flex-col gap-4">
+            <h1 class="text-3xl md:text-4xl font-heading font-bold"><?php the_title(); ?></h1>
+            <div class="text-2xl text-blue-600 font-bold"><?php echo $product ? $product->get_price_html() : ''; ?></div>
+            <div class="prose prose-slate max-w-none"><?php the_content(); ?></div>
+            <div class="mt-2 [&_form.cart]:flex [&_form.cart]:items-center [&_form.cart]:gap-3 [&_.quantity_input]:w-20 [&_.quantity_input]:border [&_.quantity_input]:border-slate-200 [&_.quantity_input]:rounded-lg [&_.quantity_input]:px-3 [&_.quantity_input]:py-2 [&_button.single_add_to_cart_button]:bg-emerald-600 [&_button.single_add_to_cart_button]:text-white [&_button.single_add_to_cart_button]:px-6 [&_button.single_add_to_cart_button]:py-3 [&_button.single_add_to_cart_button]:rounded-lg [&_button.single_add_to_cart_button]:font-semibold">
+                <?php if ($product) { woocommerce_template_single_add_to_cart(); } ?>
+            </div>
+        </div>
+    </div>
     <?php endwhile; ?>
 </main>
 <?php get_footer(); ?>
