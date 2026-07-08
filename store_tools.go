@@ -84,6 +84,22 @@ func (a *API) handlePrepareStore(site string, params map[string]string) (string,
 			WC_Install::create_pages();
 			$done[] = 'woocommerce pages ensured';
 		}
+		// F3: the block-based cart/checkout hydrate client-side and stick as
+		// skeletons in Tailwind-preflight themes (observed live). The classic
+		// shortcodes render server-side — reliable everywhere — and style.css
+		// ships token styling for them.
+		if (function_exists('wc_get_page_id')) {
+			foreach (array('cart' => '[woocommerce_cart]', 'checkout' => '[woocommerce_checkout]') as $k => $sc) {
+				$pid = (int) wc_get_page_id($k);
+				if ($pid > 0) {
+					$pg = get_post($pid);
+					if ($pg && strpos($pg->post_content, 'wp:woocommerce/' . $k) !== false) {
+						wp_update_post(array('ID' => $pid, 'post_content' => $sc));
+						$done[] = $k . ' switched to classic (server-rendered)';
+					}
+				}
+			}
+		}
 		// Funnel floor (design-depth F1): a store a stranger can actually buy
 		// from. Country from currency; COD enabled as the deterministic
 		// baseline gateway (owner upgrades to Razorpay/UPI later); one

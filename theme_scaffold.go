@@ -245,6 +245,25 @@ body {
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-heading);
 }
+
+/* Classic WooCommerce (cart / checkout / account) — server-rendered pages
+   styled through the same tokens as the rest of the store. */
+.woocommerce table.shop_table { width: 100%; border-collapse: collapse; background: var(--color-card); border: 1px solid var(--color-border); }
+.woocommerce table.shop_table th, .woocommerce table.shop_table td { padding: 12px 16px; border-bottom: 1px solid var(--color-border); text-align: left; }
+.woocommerce table.shop_table img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
+.woocommerce a.button, .woocommerce button.button, .woocommerce input.button, .woocommerce #place_order { background: var(--color-primary); color: #ffffff; border: 0; border-radius: 8px; padding: 12px 20px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
+.woocommerce a.button:hover, .woocommerce button.button:hover, .woocommerce input.button:hover, .woocommerce #place_order:hover { background: var(--color-primary-hover); color: #ffffff; }
+.woocommerce a.checkout-button { background: var(--color-secondary); }
+.woocommerce a.checkout-button:hover { background: var(--color-secondary-hover); }
+.woocommerce input.input-text, .woocommerce select, .woocommerce textarea { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; width: 100%; background: var(--color-card); font-family: var(--font-body); }
+.woocommerce form .form-row { margin-bottom: 14px; }
+.woocommerce form .form-row label { display: block; margin-bottom: 4px; font-size: 0.85rem; color: var(--color-muted); }
+.woocommerce .woocommerce-message, .woocommerce .woocommerce-info { background: var(--color-surface); border-left: 4px solid var(--color-primary); padding: 12px 16px; margin-bottom: 16px; }
+.woocommerce .woocommerce-error { background: #fbeeec; border-left: 4px solid #b3402e; padding: 12px 16px; margin-bottom: 16px; list-style: none; }
+.woocommerce .cart_totals, .woocommerce #order_review { background: var(--color-card); border: 1px solid var(--color-border); border-radius: 12px; padding: 20px; }
+.woocommerce ul#shipping_method { list-style: none; padding: 0; margin: 0; }
+.woocommerce .quantity input.qty { width: 72px; padding: 8px; border: 1px solid var(--color-border); border-radius: 8px; }
+.woocommerce .coupon input.input-text { width: auto; }
 CSS
 );
 
