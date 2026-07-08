@@ -286,7 +286,10 @@ function THEME_PREFIX_setup() {
 add_action('after_setup_theme', 'THEME_PREFIX_setup');
 
 function THEME_PREFIX_scripts() {
-    wp_enqueue_style('THEME_PREFIX-style', get_stylesheet_uri(), array(), '1.0');
+    // Version by mtime: theme slugs recur across rebuilds and Cloudflare
+    // caches static CSS aggressively — a fixed ?ver served a day-old palette
+    // to browsers while the origin was correct (found live 2026-07-08).
+    wp_enqueue_style('THEME_PREFIX-style', get_stylesheet_uri(), array(), (string) @filemtime(get_stylesheet_directory() . '/style.css'));
     wp_enqueue_style('THEME_PREFIX-fonts', '__FONTS_URL__', array(), null);
 }
 add_action('wp_enqueue_scripts', 'THEME_PREFIX_scripts');
