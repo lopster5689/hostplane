@@ -207,3 +207,24 @@ func TestDesignChecks(t *testing.T) {
 		t.Errorf("hero-less homepage must fail, got %v", nh)
 	}
 }
+
+func TestValidateHomeSectionsV3Types(t *testing.T) {
+	good := `[{"type":"announcement","chips":["Free delivery over 500","Baked fresh daily"]},
+	{"type":"hero_image","image_id":7,"eyebrow":"100% WOOD-FIRED","headline":"Baked with Fire","accent_word":"Fire","chips":["Fresh daily"]},
+	{"type":"testimonials","items":[{"quote":"Best croissants in town","name":"Asha","meta":"Indiranagar"},{"quote":"The sourdough!","name":"Rahul"}]},
+	{"type":"bestsellers"}]`
+	if _, err := validateHomeSections(good); err != nil {
+		t.Fatalf("v3 sections rejected: %v", err)
+	}
+	bad := []string{
+		`[{"type":"announcement","chips":["only one"]}]`,                              // too few chips
+		`[{"type":"testimonials","items":[{"quote":"x","name":"y"}]}]`,               // too few items
+		`[{"type":"testimonials","items":[{"quote":"","name":"y"},{"quote":"b","name":""}]}]`, // empty fields
+		`[{"type":"hero_image","image_id":7,"headline":"Baked with Fire","accent_word":"Love"}]`, // accent word not in headline
+	}
+	for _, b := range bad {
+		if _, err := validateHomeSections(b); err == nil {
+			t.Errorf("expected rejection for %s", b)
+		}
+	}
+}

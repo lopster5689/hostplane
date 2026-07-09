@@ -16,22 +16,38 @@ import (
 // homeSection is one typed slot. Exactly one Type; only the fields that type
 // uses are read. Unknown fields are dropped by re-marshalling.
 type homeSection struct {
-	Type     string   `json:"type"`
-	Headline string   `json:"headline,omitempty"`
-	Sub      string   `json:"sub,omitempty"`
-	Title    string   `json:"title,omitempty"`
-	Text     string   `json:"text,omitempty"`
-	ImageID  int      `json:"image_id,omitempty"`
-	ImageIDs []int    `json:"image_ids,omitempty"`
-	Hours    []string `json:"hours,omitempty"`
-	Address  string   `json:"address,omitempty"`
-	Phone    string   `json:"phone,omitempty"`
+	Type     string `json:"type"`
+	Headline string `json:"headline,omitempty"`
+	// AccentWord: one word of the headline rendered in the accent color
+	// (the editorial "Nature's GOLD Standard" device).
+	AccentWord string   `json:"accent_word,omitempty"`
+	Eyebrow    string   `json:"eyebrow,omitempty"`
+	Sub        string   `json:"sub,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Text       string   `json:"text,omitempty"`
+	ImageID    int      `json:"image_id,omitempty"`
+	ImageIDs   []int    `json:"image_ids,omitempty"`
+	Hours      []string `json:"hours,omitempty"`
+	Address    string   `json:"address,omitempty"`
+	Phone      string   `json:"phone,omitempty"`
+	// Chips: short trust claims floated on the hero ("Lab Tested") or
+	// ticked across the announcement bar ("Free delivery over ₹999").
+	Chips []string `json:"chips,omitempty"`
+	// Items: testimonials — quote/name/meta only; NEVER fabricated, the
+	// prompt requires them to come from the user.
+	Items []testimonialItem `json:"items,omitempty"`
+}
+
+type testimonialItem struct {
+	Quote string `json:"quote"`
+	Name  string `json:"name"`
+	Meta  string `json:"meta,omitempty"`
 }
 
 var homeSectionTypes = map[string]bool{
 	"hero_image": true, "story": true, "category_strip": true,
 	"bestsellers": true, "hours_location": true, "gallery": true,
-	"offer_banner": true,
+	"offer_banner": true, "announcement": true, "testimonials": true,
 }
 
 // validateHomeSections parses and validates the typed section list. Pure and
@@ -61,7 +77,16 @@ func validateHomeSections(raw string) (string, error) {
 				return "", fmt.Errorf("sections[%d] hero_image needs image_id (generate a wide hero image first, use its attachment ID)", i)
 			}
 			if err = capStr("headline", s.Headline, 80); err == nil {
-				err = capStr("sub", s.Sub, 160)
+				err = capStr("sub", s.Sub, 200)
+			}
+			if err == nil {
+				err = capStr("eyebrow", s.Eyebrow, 40)
+			}
+			if err == nil && len(s.Chips) > 3 {
+				err = fmt.Errorf("max 3 hero chips")
+			}
+			if err == nil && s.AccentWord != "" && !strings.Contains(strings.ToLower(s.Headline), strings.ToLower(s.AccentWord)) {
+				err = fmt.Errorf("accent_word must be a word from the headline")
 			}
 		case "story":
 			if s.Title == "" || s.Text == "" {
@@ -98,6 +123,30 @@ func validateHomeSections(raw string) (string, error) {
 				return "", fmt.Errorf("sections[%d] offer_banner needs text", i)
 			}
 			err = capStr("text", s.Text, 120)
+		case "announcement":
+			if len(s.Chips) < 2 || len(s.Chips) > 4 {
+				return "", fmt.Errorf("sections[%d] announcement needs 2-4 short chips (trust claims / offers)", i)
+			}
+			for _, c := range s.Chips {
+				if err = capStr("chip", c, 60); err != nil {
+					break
+				}
+			}
+		case "testimonials":
+			if len(s.Items) < 2 || len(s.Items) > 4 {
+				return "", fmt.Errorf("sections[%d] testimonials needs 2-4 items — and ONLY quotes the user actually provided, never invented", i)
+			}
+			for _, it := range s.Items {
+				if it.Quote == "" || it.Name == "" {
+					return "", fmt.Errorf("sections[%d] testimonial items need quote and name", i)
+				}
+				if err = capStr("quote", it.Quote, 280); err != nil {
+					break
+				}
+				if err = capStr("meta", it.Meta, 60); err != nil {
+					break
+				}
+			}
 		case "bestsellers":
 			err = capStr("title", s.Title, 80)
 		}
@@ -116,9 +165,25 @@ func (a *API) handleSetHomeSections(site string, params map[string]string) (stri
 	if err != nil {
 		return "", -1, err
 	}
+	// Footer chrome reads the store contact site-wide: mirror hours_location.
+	var contact struct {
+		Hours   []string `json:"hours,omitempty"`
+		Address string   `json:"address,omitempty"`
+		Phone   string   `json:"phone,omitempty"`
+	}
+	var secs []homeSection
+	_ = json.Unmarshal([]byte(norm), &secs)
+	for _, sc := range secs {
+		if sc.Type == "hours_location" {
+			contact.Hours, contact.Address, contact.Phone = sc.Hours, sc.Address, sc.Phone
+		}
+	}
+	contactJSON, _ := json.Marshal(contact)
+	b64c := base64.StdEncoding.EncodeToString(contactJSON)
 	b64 := base64.StdEncoding.EncodeToString([]byte(norm))
 	phpCode := `
 		update_option('hostplane_home_sections', base64_decode("` + b64 + `"));
+		update_option('hostplane_contact', base64_decode("` + b64c + `"));
 		$secs = json_decode(get_option('hostplane_home_sections'), true);
 		echo 'home sections set: ' . count($secs) . ' section(s) — ';
 		foreach ($secs as $s) { echo $s['type'] . ' '; }

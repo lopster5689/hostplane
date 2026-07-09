@@ -357,6 +357,17 @@ file_put_contents($dir . "/header.php", <<<'HEADER'
 <body <?php body_class('bg-surface text-ink font-body antialiased'); ?>>
 <?php wp_body_open(); ?>
 
+<?php
+$hp_ann = null;
+foreach ((array) json_decode(get_option('hostplane_home_sections', '[]'), true) as $hp_a) {
+    if (isset($hp_a['type']) && $hp_a['type'] === 'announcement') { $hp_ann = $hp_a; break; }
+}
+if ($hp_ann && !empty($hp_ann['chips'])): ?>
+<div class="bg-footer text-white/85 text-xs py-2 px-4 text-center tracking-wide">
+    <?php echo esc_html(implode('   •   ', array_map('strval', (array) $hp_ann['chips']))); ?>
+</div>
+<?php endif; ?>
+
 <header class="sticky top-0 z-50 bg-[color-mix(in_srgb,var(--color-card)_85%,transparent)] backdrop-blur-md border-b border-line">
     <div class="max-w-7xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
         <a href="<?php echo home_url(); ?>" class="text-xl font-heading font-extrabold tracking-tight">
@@ -421,26 +432,61 @@ file_put_contents($dir . "/header.php", $head_content);
 // footer.php — Dark 3-column footer
 // ═══════════════════════════════════════════════════════════════
 file_put_contents($dir . "/footer.php", <<<'FOOTER'
-<footer class="bg-footer text-white mt-20">
+<footer class="bg-footer text-white mt-24">
     <div class="max-w-7xl mx-auto px-4 md:px-6 py-16">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-12 mb-12">
+        <?php
+        $hp_contact = json_decode(get_option('hostplane_contact', '{}'), true);
+        if (!is_array($hp_contact)) { $hp_contact = array(); }
+        $hp_privacy = function_exists('get_privacy_policy_url') ? get_privacy_policy_url() : '';
+        $hp_terms_id = (int) get_option('woocommerce_terms_page_id');
+        $hp_refund_id = (int) get_option('woocommerce_refund_returns_page_id');
+        ?>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-12 mb-12">
             <div>
-                <h3 class="text-lg font-heading font-bold mb-4"><?php bloginfo('name'); ?></h3>
-                <p class="text-white/60 text-sm leading-relaxed"><?php bloginfo('description'); ?></p>
+                <h3 class="text-xl font-heading font-bold mb-4"><?php bloginfo('name'); ?></h3>
+                <p class="text-white/60 text-sm leading-relaxed mb-6"><?php bloginfo('description'); ?></p>
+                <?php if (class_exists('WooCommerce')): ?>
+                <div class="flex flex-wrap gap-2">
+                    <span class="border border-white/20 text-white/70 text-[0.65rem] font-semibold tracking-wider px-2.5 py-1 rounded">COD</span>
+                    <span class="border border-white/20 text-white/70 text-[0.65rem] font-semibold tracking-wider px-2.5 py-1 rounded">UPI</span>
+                    <span class="border border-white/20 text-white/70 text-[0.65rem] font-semibold tracking-wider px-2.5 py-1 rounded">VISA</span>
+                    <span class="border border-white/20 text-white/70 text-[0.65rem] font-semibold tracking-wider px-2.5 py-1 rounded">MASTERCARD</span>
+                </div>
+                <?php endif; ?>
             </div>
             <div>
-                <h4 class="font-semibold mb-4 text-sm uppercase tracking-wider text-white/50">Quick Links</h4>
+                <h4 class="font-semibold mb-4 text-xs uppercase tracking-[0.18em] text-white/50">Quick Links</h4>
                 <ul class="space-y-3">
                     <li><a href="<?php echo home_url(); ?>" class="text-white/70 hover:text-white text-sm transition">Home</a></li>
                     <li><a href="<?php echo home_url('/shop'); ?>" class="text-white/70 hover:text-white text-sm transition">Shop</a></li>
                     <?php if (class_exists('WooCommerce')): ?>
                     <li><a href="<?php echo wc_get_cart_url(); ?>" class="text-white/70 hover:text-white text-sm transition">Cart</a></li>
+                    <li><a href="<?php echo wc_get_page_permalink('myaccount'); ?>" class="text-white/70 hover:text-white text-sm transition">My Account</a></li>
                     <?php endif; ?>
                 </ul>
             </div>
             <div>
-                <h4 class="font-semibold mb-4 text-sm uppercase tracking-wider text-white/50">Contact</h4>
+                <h4 class="font-semibold mb-4 text-xs uppercase tracking-[0.18em] text-white/50">Policies</h4>
+                <ul class="space-y-3">
+                    <?php if ($hp_privacy): ?><li><a href="<?php echo esc_url($hp_privacy); ?>" class="text-white/70 hover:text-white text-sm transition">Privacy Policy</a></li><?php endif; ?>
+                    <?php if ($hp_terms_id > 0): ?><li><a href="<?php echo esc_url(get_permalink($hp_terms_id)); ?>" class="text-white/70 hover:text-white text-sm transition">Terms &amp; Conditions</a></li><?php endif; ?>
+                    <?php if ($hp_refund_id > 0 && get_post_status($hp_refund_id) === 'publish'): ?><li><a href="<?php echo esc_url(get_permalink($hp_refund_id)); ?>" class="text-white/70 hover:text-white text-sm transition">Refunds &amp; Returns</a></li><?php endif; ?>
+                </ul>
+            </div>
+            <div>
+                <h4 class="font-semibold mb-4 text-xs uppercase tracking-[0.18em] text-white/50">Contact</h4>
+                <?php if (!empty($hp_contact['address'])): ?><p class="text-white/70 text-sm mb-2"><?php echo esc_html($hp_contact['address']); ?></p><?php endif; ?>
+                <?php if (!empty($hp_contact['phone'])): ?><p class="text-sm mb-3"><a href="tel:<?php echo esc_attr(preg_replace('/[^0-9+]/', '', $hp_contact['phone'])); ?>" class="text-white/90 font-semibold hover:text-white"><?php echo esc_html($hp_contact['phone']); ?></a></p><?php endif; ?>
+                <?php if (!empty($hp_contact['hours']) && is_array($hp_contact['hours'])): ?>
+                <ul class="space-y-1">
+                    <?php foreach (array_slice($hp_contact['hours'], 0, 3) as $hp_h): ?>
+                    <li class="text-white/60 text-xs"><?php echo esc_html($hp_h); ?></li>
+                    <?php endforeach; ?>
+                </ul>
+                <?php endif; ?>
+                <?php if (empty($hp_contact['address']) && empty($hp_contact['phone'])): ?>
                 <p class="text-white/60 text-sm">Get in touch with us for any questions about your order.</p>
+                <?php endif; ?>
             </div>
         </div>
         <div class="border-t border-white/10 pt-8 text-center">
@@ -475,22 +521,40 @@ foreach ($hp_sections as $hp_s):
     $t = isset($hp_s['type']) ? $hp_s['type'] : '';
     if ($t === 'hero_image'):
         $hp_img = wp_get_attachment_image_src((int) $hp_s['image_id'], 'full');
+        $hp_head = !empty($hp_s['headline']) ? $hp_s['headline'] : get_bloginfo('name');
+        $hp_head_html = esc_html($hp_head);
+        if (!empty($hp_s['accent_word'])) {
+            $hp_aw = esc_html($hp_s['accent_word']);
+            $hp_head_html = preg_replace('/' . preg_quote($hp_aw, '/') . '/i', '<span class="text-accent">$0</span>', $hp_head_html, 1);
+        }
 ?>
 <section class="relative overflow-hidden">
     <?php if ($hp_img): ?>
     <img src="<?php echo esc_url($hp_img[0]); ?>" alt="" class="absolute inset-0 w-full h-full object-cover">
-    <div class="absolute inset-0 bg-black/45"></div>
+    <div class="absolute inset-0 bg-gradient-to-r from-black/70 via-black/40 to-black/10"></div>
     <?php endif; ?>
-    <div class="relative max-w-7xl mx-auto px-4 md:px-6 py-28 md:py-40 <?php echo $hp_img ? 'text-white' : ''; ?>">
-        <h1 class="text-4xl md:text-6xl font-heading font-extrabold tracking-tight mb-4 max-w-3xl"><?php echo esc_html(!empty($hp_s['headline']) ? $hp_s['headline'] : get_bloginfo('name')); ?></h1>
-        <?php if (!empty($hp_s['sub'])): ?><p class="text-xl <?php echo $hp_img ? 'text-white/85' : 'text-muted'; ?> mb-8 max-w-2xl leading-relaxed"><?php echo esc_html($hp_s['sub']); ?></p><?php endif; ?>
-        <a href="<?php echo home_url('/shop'); ?>" class="inline-block bg-primary text-white px-8 py-3.5 rounded-lg font-semibold hover:bg-primary-hover transition shadow-lg">Shop Now</a>
+    <div class="relative max-w-7xl mx-auto px-4 md:px-6 py-32 md:py-44 <?php echo $hp_img ? 'text-white' : ''; ?>">
+        <?php if (!empty($hp_s['eyebrow'])): ?>
+        <p class="inline-block text-[0.7rem] font-semibold uppercase tracking-[0.22em] <?php echo $hp_img ? 'text-white/90 border border-white/30' : 'text-primary border border-line'; ?> rounded-full px-4 py-1.5 mb-6"><?php echo esc_html($hp_s['eyebrow']); ?></p>
+        <?php endif; ?>
+        <h1 class="text-5xl md:text-7xl font-heading font-extrabold tracking-tight leading-[1.05] mb-6 max-w-3xl"><?php echo $hp_head_html; ?></h1>
+        <?php if (!empty($hp_s['sub'])): ?><p class="text-lg md:text-xl <?php echo $hp_img ? 'text-white/85' : 'text-muted'; ?> mb-9 max-w-2xl leading-relaxed"><?php echo esc_html($hp_s['sub']); ?></p><?php endif; ?>
+        <a href="<?php echo home_url('/shop'); ?>" class="inline-block bg-primary text-white px-9 py-4 rounded-lg font-semibold hover:bg-primary-hover transition shadow-lg text-lg">Shop Now</a>
+        <?php if (!empty($hp_s['chips'])): ?>
+        <div class="flex flex-wrap gap-3 mt-10">
+            <?php foreach ((array) $hp_s['chips'] as $hp_c): ?>
+            <span class="<?php echo $hp_img ? 'bg-white/15 text-white border-white/25' : 'bg-card text-ink border-line'; ?> backdrop-blur border text-xs font-semibold px-4 py-2 rounded-full">✓&nbsp; <?php echo esc_html($hp_c); ?></span>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
     </div>
 </section>
 <?php elseif ($t === 'story'): ?>
 <section class="bg-card">
-    <div class="max-w-4xl mx-auto px-4 md:px-6 py-16 md:py-24 text-center">
-        <h2 class="text-2xl md:text-3xl font-heading font-bold mb-6"><?php echo esc_html($hp_s['title']); ?></h2>
+    <div class="max-w-3xl mx-auto px-4 md:px-6 py-20 md:py-28 text-center">
+        <p class="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-primary mb-4">Our Story</p>
+        <h2 class="text-3xl md:text-4xl font-heading font-bold tracking-tight mb-4"><?php echo esc_html($hp_s['title']); ?></h2>
+        <div class="w-14 h-1 bg-accent rounded mx-auto mb-8"></div>
         <p class="text-muted leading-relaxed text-lg"><?php echo esc_html($hp_s['text']); ?></p>
     </div>
 </section>
@@ -524,10 +588,12 @@ foreach ($hp_sections as $hp_s):
                     <img src="<?php echo $hp_pimg[0]; ?>" alt="<?php echo esc_attr($hp_p->get_name()); ?>" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500">
                 <?php endif; ?>
             </div>
-            <div class="p-4">
-                <h3 class="font-semibold text-sm mb-1 line-clamp-2"><?php echo $hp_p->get_name(); ?></h3>
-                <p class="text-primary font-bold"><?php echo $hp_p->get_price_html(); ?></p>
-                <a href="<?php echo $hp_p->get_permalink(); ?>" class="mt-3 block w-full bg-secondary text-white text-center py-2 rounded-lg text-sm font-semibold hover:bg-secondary-hover transition">View Product</a>
+            <div class="p-5">
+                <div class="flex items-baseline justify-between gap-2 mb-3">
+                    <h3 class="font-heading font-semibold line-clamp-2"><?php echo $hp_p->get_name(); ?></h3>
+                    <p class="text-primary font-bold whitespace-nowrap"><?php echo $hp_p->get_price_html(); ?></p>
+                </div>
+                <a href="<?php echo $hp_p->get_permalink(); ?>" class="block w-full border border-line text-center py-2.5 rounded-lg text-sm font-semibold hover:border-primary hover:text-primary transition">View Product</a>
             </div>
         </div>
         <?php endforeach; ?>
@@ -564,6 +630,28 @@ foreach ($hp_sections as $hp_s):
         <?php endforeach; ?>
     </div>
 </section>
+<?php elseif ($t === 'testimonials' && !empty($hp_s['items'])): ?>
+<section class="bg-surface">
+    <div class="max-w-7xl mx-auto px-4 md:px-6 py-20 md:py-28">
+        <h2 class="text-3xl md:text-4xl font-heading font-bold tracking-tight text-center mb-12"><?php echo esc_html(!empty($hp_s['title']) ? $hp_s['title'] : 'What our customers say'); ?></h2>
+        <div class="grid md:grid-cols-<?php echo min(3, max(2, count((array) $hp_s['items']))); ?> gap-6">
+            <?php foreach ((array) $hp_s['items'] as $hp_t): if (empty($hp_t['quote'])) continue; ?>
+            <div class="bg-card border border-line rounded-2xl p-7 flex flex-col gap-4">
+                <div class="text-accent tracking-[0.2em] text-sm">★★★★★</div>
+                <p class="text-ink leading-relaxed">“<?php echo esc_html($hp_t['quote']); ?>”</p>
+                <div class="flex items-center gap-3 mt-auto pt-2">
+                    <span class="w-10 h-10 rounded-full bg-primary text-white font-bold flex items-center justify-center text-sm"><?php echo esc_html(mb_strtoupper(mb_substr(trim($hp_t['name']), 0, 1))); ?></span>
+                    <span>
+                        <span class="block font-semibold text-sm"><?php echo esc_html($hp_t['name']); ?></span>
+                        <?php if (!empty($hp_t['meta'])): ?><span class="block text-muted text-xs"><?php echo esc_html($hp_t['meta']); ?></span><?php endif; ?>
+                    </span>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+</section>
+<?php elseif ($t === 'announcement'): /* rendered site-wide by header.php */ ?>
 <?php elseif ($t === 'offer_banner'): ?>
 <section class="bg-accent">
     <div class="max-w-7xl mx-auto px-4 md:px-6 py-3 text-center">
