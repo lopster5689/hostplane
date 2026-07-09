@@ -193,6 +193,9 @@ var commentActionAllowlist = map[string]bool{
 var safePostMetaKeys = map[string]bool{
 	"_thumbnail_id":     true,
 	"_wp_page_template": true,
+	// Marks attachments imported as free brand placeholders, so the paid
+	// photography pass can tell which slots still need real images.
+	"_hostplane_placeholder": true,
 	// WooCommerce product meta
 	"_product_image_gallery": true,
 	"_regular_price":         true,
@@ -317,6 +320,11 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		}
 		if !safeOptionKeys[key] {
 			return nil, fmt.Errorf("option key %q is not allowed", key)
+		}
+		// Structured options are read-open but write-closed: raw writes would
+		// bypass their validators (set_home_sections / contact mirroring).
+		if key == "hostplane_home_sections" || key == "hostplane_contact" {
+			return nil, fmt.Errorf("option %q is read-only here — use set_home_sections", key)
 		}
 		return []string{"wp", "option", "update", key, value, "--allow-root"}, nil
 
