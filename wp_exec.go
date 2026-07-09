@@ -1622,15 +1622,35 @@ func (a *API) handleImageImportChunk(site string, params map[string]string) (str
 		}
 		return "part appended", 0, nil
 	case "finish":
-		out, exit, err := a.execWPCLI(site, []string{"sh", "-c", "cat " + staging + " && rm -f " + staging})
+		// Decode IN the container — reading the staged base64 back through
+		// execWPCLI truncates at maxOutputBytes (the first version of this
+		// tool corrupted every image that way, 2026-07-09).
+		filename := params["filename"]
+		if !regexp.MustCompile(`^[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp)$`).MatchString(filename) {
+			return "", -1, fmt.Errorf("filename must be alphanumeric with .png/.jpg/.jpeg/.webp extension")
+		}
+		tmpImg := "/tmp/hp_img_" + uploadID + "_" + filename
+		out, exit, err := a.execWPCLI(site, []string{"sh", "-c",
+			"base64 -d " + staging + " > " + tmpImg + " && rm -f " + staging + " && stat -c %s " + tmpImg})
 		if err != nil {
 			return "", -1, err
 		}
 		if exit != 0 {
-			return "", -1, fmt.Errorf("staging file missing")
+			return "", -1, fmt.Errorf("staged decode failed: %s", strings.TrimSpace(out))
 		}
-		p2 := map[string]string{"data": strings.TrimSpace(out), "filename": params["filename"], "title": params["title"]}
-		return a.handleImageImport(site, p2)
+		importCmd := []string{"sh", "-c", fmt.Sprintf("wp media import '%s' --porcelain --allow-root 2>&1 && rm -f '%s'", tmpImg, tmpImg)}
+		output, exitCode, ierr := a.execWPCLI(site, importCmd)
+		if ierr != nil {
+			return "", -1, fmt.Errorf("wp media import: %w", ierr)
+		}
+		if exitCode != 0 {
+			return output, exitCode, nil
+		}
+		attachID := strings.TrimSpace(output)
+		if title := params["title"]; title != "" {
+			a.execWPCLI(site, []string{"sh", "-c", fmt.Sprintf("wp post update %s --post_title='%s' --allow-root 2>&1", attachID, strings.ReplaceAll(title, "'", ""))})
+		}
+		return attachID, 0, nil
 	}
 	return "", -1, fmt.Errorf("stage must be begin, part or finish")
 }
