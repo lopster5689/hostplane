@@ -934,6 +934,31 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		return []string{"wp", "rewrite", "structure", structure, "--allow-root"}, nil
 
 	// ── WooCommerce: Products ────────────────────────────────────
+	case "media_pass_state":
+		// Read-only, single round-trip snapshot for the photography pass:
+		// home sections, site icon, products with thumbnails, and which
+		// attachments are tagged placeholders. Replaces ~15 sequential reads
+		// that blew past Cloudflare's 100s proxy timeout on the quote path.
+		phpState := `
+			$out = array();
+			$out["sections"] = json_decode(get_option("hostplane_home_sections", "[]"), true);
+			if (!is_array($out["sections"])) { $out["sections"] = array(); }
+			$out["site_icon"] = (string) get_option("site_icon", "");
+			$out["products"] = array();
+			foreach (get_posts(array("post_type"=>"product","numberposts"=>-1,"post_status"=>"publish")) as $p) {
+				$out["products"][] = array(
+					"id" => (string) $p->ID,
+					"name" => $p->post_title,
+					"thumb" => (string) get_post_meta($p->ID, "_thumbnail_id", true),
+				);
+			}
+			$out["placeholders"] = array_map("strval", get_posts(array(
+				"post_type"=>"attachment","numberposts"=>-1,"post_status"=>"any",
+				"meta_key"=>"_hostplane_placeholder","meta_value"=>"1","fields"=>"ids")));
+			echo json_encode($out);
+		`
+		return []string{"wp", "eval", phpState, "--allow-root"}, nil
+
 	case "list_products":
 		cmd := []string{"wp", "wc", "product", "list", "--user=1", "--format=json", "--allow-root"}
 		if status := params["status"]; status != "" {
