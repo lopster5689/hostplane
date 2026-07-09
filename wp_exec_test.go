@@ -227,3 +227,22 @@ func equalStrSlice(a, b []string) bool {
 	}
 	return true
 }
+
+// media_pass_state is only referenced as a switch case, so the compiler lowers
+// the literal into inline comparisons — you cannot verify its presence by
+// grepping the binary (that false negative cost a deploy cycle on 2026-07-09).
+// This test is the reliable check.
+func TestMediaPassState(t *testing.T) {
+	cmd, err := buildTool("media_pass_state", map[string]string{})
+	if err != nil {
+		t.Fatalf("media_pass_state: %v", err)
+	}
+	if len(cmd) < 3 || cmd[0] != "wp" || cmd[1] != "eval" {
+		t.Fatalf("unexpected command shape: %v", cmd)
+	}
+	for _, want := range []string{"hostplane_home_sections", "site_icon", "_thumbnail_id", "_hostplane_placeholder"} {
+		if !strings.Contains(cmd[2], want) {
+			t.Fatalf("snapshot php missing %s", want)
+		}
+	}
+}
