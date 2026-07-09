@@ -1454,6 +1454,21 @@ func (a *API) handleWPExec(c *gin.Context) {
 	// Handle import_image_base64 specially — data is too large for command args.
 	// We write the decoded image to a temp file via a small stdin-based exec,
 	// then run wp media import on it.
+	if req.Tool == "import_image_chunk" {
+		output, exitCode, err := a.handleImageImportChunk(site, req.Params)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		resp := WPExecResponse{Site: site, Tool: req.Tool, Output: output, ExitCode: exitCode}
+		if exitCode != 0 {
+			c.JSON(http.StatusUnprocessableEntity, resp)
+			return
+		}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
 	if req.Tool == "import_image_base64" {
 		output, exitCode, err := a.handleImageImport(site, req.Params)
 		if err != nil {
@@ -1579,6 +1594,47 @@ func stripDockerMuxAll(r io.Reader) io.Reader {
 
 // handleImageImport decodes base64 image data, writes it into the container via
 // Docker exec stdin, then runs wp media import to add it to the media library.
+// handleImageImportChunk implements a transport-resilient upload: base64
+// arrives in <=256KB parts (stage=begin|part|finish). Large single POSTs to
+// the control plane die when the Tailscale path degrades to a lossy relay
+// (observed 2026-07-09: >~500KB bodies reset mid-transfer while small calls
+// pass) — chunking makes image import immune to path quality.
+func (a *API) handleImageImportChunk(site string, params map[string]string) (string, int, error) {
+	uploadID := params["upload_id"]
+	stage := params["stage"]
+	if !regexp.MustCompile(`^[a-zA-Z0-9_-]{6,64}$`).MatchString(uploadID) {
+		return "", -1, fmt.Errorf("upload_id must be 6-64 url-safe chars")
+	}
+	staging := "/tmp/hp_upload_" + uploadID + ".b64"
+	switch stage {
+	case "begin":
+		if err := a.writeContainerFile(site, staging, []byte{}); err != nil {
+			return "", -1, err
+		}
+		return "upload started", 0, nil
+	case "part":
+		part := params["data"]
+		if part == "" || len(part) > 300*1024 {
+			return "", -1, fmt.Errorf("part must be 1..300KB of base64")
+		}
+		if err := a.appendContainerFile(site, staging, []byte(part)); err != nil {
+			return "", -1, err
+		}
+		return "part appended", 0, nil
+	case "finish":
+		out, exit, err := a.execWPCLI(site, []string{"sh", "-c", "cat " + staging + " && rm -f " + staging})
+		if err != nil {
+			return "", -1, err
+		}
+		if exit != 0 {
+			return "", -1, fmt.Errorf("staging file missing")
+		}
+		p2 := map[string]string{"data": strings.TrimSpace(out), "filename": params["filename"], "title": params["title"]}
+		return a.handleImageImport(site, p2)
+	}
+	return "", -1, fmt.Errorf("stage must be begin, part or finish")
+}
+
 func (a *API) handleImageImport(site string, params map[string]string) (string, int, error) {
 	data := params["data"]
 	filename := params["filename"]

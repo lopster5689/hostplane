@@ -65,6 +65,46 @@ func (a *API) writeContainerFile(site, path string, data []byte) error {
 	return fmt.Errorf("container write timed out")
 }
 
+// appendContainerFile appends data to a path inside the site's PHP container
+// (chunked-upload support; same stdin pattern as writeContainerFile).
+func (a *API) appendContainerFile(site, path string, data []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	execResp, err := a.docker.ContainerExecCreate(ctx, PHPContainerName(site), types.ExecConfig{
+		Cmd:          []string{"sh", "-c", "cat >> " + path},
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return fmt.Errorf("exec create (append): %w", err)
+	}
+	attach, err := a.docker.ContainerExecAttach(ctx, execResp.ID, types.ExecStartCheck{})
+	if err != nil {
+		return fmt.Errorf("exec attach (append): %w", err)
+	}
+	_, err = io.Copy(attach.Conn, bytes.NewReader(data))
+	attach.CloseWrite()
+	attach.Close()
+	if err != nil {
+		return fmt.Errorf("append payload: %w", err)
+	}
+	for i := 0; i < 20; i++ {
+		inspect, ierr := a.docker.ContainerExecInspect(ctx, execResp.ID)
+		if ierr != nil {
+			return fmt.Errorf("exec inspect (append): %w", ierr)
+		}
+		if !inspect.Running {
+			if inspect.ExitCode != 0 {
+				return fmt.Errorf("container append exited %d", inspect.ExitCode)
+			}
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("container append timed out")
+}
+
 // phpLint runs `php -l` on a path inside the container. Empty string = clean.
 func (a *API) phpLint(site, path string) (string, error) {
 	out, exit, err := a.execWPCLI(site, []string{"sh", "-c", "php -l " + path + " 2>&1"})
