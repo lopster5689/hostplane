@@ -246,3 +246,27 @@ func TestMediaPassState(t *testing.T) {
 		}
 	}
 }
+
+// 2026-07-09 real-user regressions: menu add-custom argument order (title
+// FIRST — the swap produced "http://Home" links), and page_on_front must
+// publish the page it assigns.
+func TestMenuAddCustomArgOrder(t *testing.T) {
+	cmd, err := buildTool("add_menu_item", map[string]string{"menu_id": "16", "title": "Home", "url": "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"wp", "menu", "item", "add-custom", "16", "Home", "/", "--allow-root"}
+	if strings.Join(cmd, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %v want %v", cmd, want)
+	}
+}
+
+func TestPageOnFrontPublishes(t *testing.T) {
+	cmd, err := buildTool("update_option", map[string]string{"key": "page_on_front", "value": "30"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd[1] != "eval" || !strings.Contains(cmd[2], "post_status") || !strings.Contains(cmd[2], "show_on_front") {
+		t.Fatalf("page_on_front should publish via eval: %v", cmd[:2])
+	}
+}

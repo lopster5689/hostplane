@@ -326,6 +326,19 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		if key == "hostplane_home_sections" || key == "hostplane_contact" {
 			return nil, fmt.Errorf("option %q is read-only here — use set_home_sections", key)
 		}
+		// A draft front page 404s the homepage (bit a real user 2026-07-09):
+		// assigning it as the front page IS the intent to publish it.
+		if key == "page_on_front" {
+			if err := validatePostID(value); err != nil {
+				return nil, fmt.Errorf("page_on_front must be a page ID: %w", err)
+			}
+			php := `$pid = ` + value + `; $p = get_post($pid);
+				if (!$p || $p->post_type !== 'page') { echo 'page_on_front: ' . $pid . ' is not a page'; exit(1); }
+				if ($p->post_status !== 'publish') { wp_update_post(array('ID' => $pid, 'post_status' => 'publish')); }
+				update_option('page_on_front', $pid); update_option('show_on_front', 'page');
+				echo 'front page set to ' . $pid . ' (published)';`
+			return []string{"wp", "eval", php, "--allow-root"}, nil
+		}
 		return []string{"wp", "option", "update", key, value, "--allow-root"}, nil
 
 	case "list_posts":
@@ -783,7 +796,9 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 			if !menuURLRe.MatchString(url) {
 				return nil, fmt.Errorf("invalid menu url %q — for pages/posts on this site pass post_id instead; a custom url must be absolute (https://example.com/...) or site-relative starting with /", url)
 			}
-			return []string{"wp", "menu", "item", "add-custom", menuID, url, title, "--allow-root"}, nil
+			// wp-cli signature: add-custom <menu> <title> <link> — title FIRST.
+			// (Was swapped; produced items titled "/" linking to "http://Home".)
+			return []string{"wp", "menu", "item", "add-custom", menuID, title, url, "--allow-root"}, nil
 		}
 		return nil, fmt.Errorf("either post_id or url+title is required")
 

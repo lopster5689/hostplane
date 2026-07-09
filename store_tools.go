@@ -56,11 +56,20 @@ func (a *API) handlePrepareStore(site string, params map[string]string) (string,
 	if !storeCurrencies[currency] {
 		return "", -1, fmt.Errorf("currency is required and must be one of INR, USD, EUR, GBP, AUD, CAD, SGD, AED, JPY, NZD")
 	}
+	// Funnel-floor prerequisite: every WC step below silently no-ops without
+	// WooCommerce (bit a real user 2026-07-09: fresh manual install → 5×422 on
+	// products and a store with no payments/shipping). Ensure it first —
+	// idempotent, and the eval below runs in a fresh process that loads it.
+	if out, code, err := a.execWPCLI(site, []string{"sh", "-c",
+		"wp plugin is-active woocommerce --allow-root >/dev/null 2>&1 || wp plugin install woocommerce --activate --allow-root 2>&1"}); err != nil || code != 0 {
+		return "", -1, fmt.Errorf("prepare_store: ensuring WooCommerce failed: %s", strings.TrimSpace(out))
+	}
 	// Free-text values ride base64 so they can't break out of the PHP string.
 	nameB64 := base64.StdEncoding.EncodeToString([]byte(params["store_name"]))
 	tagB64 := base64.StdEncoding.EncodeToString([]byte(params["tagline"]))
 	phpCode := `
-		$done = array();
+		if (!class_exists('WooCommerce')) { echo 'prepare_store: WooCommerce still not active after install'; exit(1); }
+		$done = array('woocommerce active');
 		update_option('woocommerce_currency', '` + currency + `');
 		$done[] = 'currency=` + currency + `';
 		$name = base64_decode("` + nameB64 + `");
