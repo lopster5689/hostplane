@@ -61,6 +61,8 @@ var safeOptionKeys = map[string]bool{
 	"woocommerce_myaccount_page_id": true,
 	"woocommerce_currency":          true,
 	"site_icon":                     true,
+	"hostplane_home_sections":       true,
+	"hostplane_contact":             true,
 	"woocommerce_store_address":     true,
 	"woocommerce_store_city":        true,
 	"woocommerce_default_country":   true,
