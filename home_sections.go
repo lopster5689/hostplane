@@ -30,6 +30,11 @@ type homeSection struct {
 	Hours      []string `json:"hours,omitempty"`
 	Address    string   `json:"address,omitempty"`
 	Phone      string   `json:"phone,omitempty"`
+	// Layout: hero variant — "full" (default, image behind text) or "split"
+	// (content left on warm surface, framed image right — the editorial look).
+	Layout string `json:"layout,omitempty"`
+	// ButtonLabel: cta_band button text (defaults to "Shop Now").
+	ButtonLabel string `json:"button_label,omitempty"`
 	// Chips: short trust claims floated on the hero ("Lab Tested") or
 	// ticked across the announcement bar ("Free delivery over ₹999").
 	Chips []string `json:"chips,omitempty"`
@@ -48,6 +53,7 @@ var homeSectionTypes = map[string]bool{
 	"hero_image": true, "story": true, "category_strip": true,
 	"bestsellers": true, "hours_location": true, "gallery": true,
 	"offer_banner": true, "announcement": true, "testimonials": true,
+	"cta_band": true,
 }
 
 // validateHomeSections parses and validates the typed section list. Pure and
@@ -88,12 +94,25 @@ func validateHomeSections(raw string) (string, error) {
 			if err == nil && s.AccentWord != "" && !strings.Contains(strings.ToLower(s.Headline), strings.ToLower(s.AccentWord)) {
 				err = fmt.Errorf("accent_word must be a word from the headline")
 			}
+			if err == nil && s.Layout != "" && s.Layout != "full" && s.Layout != "split" {
+				err = fmt.Errorf("layout must be full or split")
+			}
 		case "story":
 			if s.Title == "" || s.Text == "" {
 				return "", fmt.Errorf("sections[%d] story needs title and text", i)
 			}
 			if err = capStr("title", s.Title, 80); err == nil {
 				err = capStr("text", s.Text, 1200)
+			}
+			// optional image_id -> two-column editorial story
+		case "cta_band":
+			if s.Headline == "" {
+				return "", fmt.Errorf("sections[%d] cta_band needs headline", i)
+			}
+			if err = capStr("headline", s.Headline, 90); err == nil {
+				if err = capStr("text", s.Text, 160); err == nil {
+					err = capStr("button_label", s.ButtonLabel, 30)
+				}
 			}
 		case "hours_location":
 			if len(s.Hours) > 7 {

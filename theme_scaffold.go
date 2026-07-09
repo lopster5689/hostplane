@@ -393,6 +393,10 @@ if ($hp_ann && !empty($hp_ann['chips'])): ?>
         </nav>
 
         <div class="flex items-center space-x-4">
+            <?php $hp_hc = json_decode(get_option('hostplane_contact', '{}'), true);
+            if (!empty($hp_hc['phone'])): ?>
+            <a href="tel:<?php echo esc_attr(preg_replace('/[^0-9+]/', '', $hp_hc['phone'])); ?>" class="hidden lg:block text-sm font-semibold text-muted hover:text-primary transition"><?php echo esc_html($hp_hc['phone']); ?></a>
+            <?php endif; ?>
             <?php if (class_exists('WooCommerce')): ?>
             <a href="<?php echo wc_get_cart_url(); ?>" class="relative p-2 text-muted hover:text-ink">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -435,7 +439,7 @@ file_put_contents($dir . "/header.php", $head_content);
 // footer.php — Dark 3-column footer
 // ═══════════════════════════════════════════════════════════════
 file_put_contents($dir . "/footer.php", <<<'FOOTER'
-<footer class="bg-footer text-white mt-24">
+<footer class="bg-footer text-white mt-16">
     <div class="max-w-7xl mx-auto px-4 md:px-6 py-16">
         <?php
         $hp_contact = json_decode(get_option('hostplane_contact', '{}'), true);
@@ -530,7 +534,35 @@ foreach ($hp_sections as $hp_s):
             $hp_aw = esc_html($hp_s['accent_word']);
             $hp_head_html = preg_replace('/' . preg_quote($hp_aw, '/') . '/i', '<span class="text-accent">$0</span>', $hp_head_html, 1);
         }
+        $hp_split = (isset($hp_s['layout']) && $hp_s['layout'] === 'split');
 ?>
+<?php if ($hp_split): ?>
+<section class="bg-card border-b border-line overflow-hidden">
+    <div class="max-w-7xl mx-auto px-4 md:px-6 py-16 md:py-24 grid md:grid-cols-2 gap-12 items-center">
+        <div>
+            <?php if (!empty($hp_s['eyebrow'])): ?>
+            <p class="inline-block text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-primary border border-line rounded-full px-4 py-1.5 mb-6"><?php echo esc_html($hp_s['eyebrow']); ?></p>
+            <?php endif; ?>
+            <h1 class="text-4xl md:text-6xl font-heading font-extrabold tracking-tight leading-[1.06] mb-6 [text-wrap:balance]"><?php echo $hp_head_html; ?></h1>
+            <?php if (!empty($hp_s['sub'])): ?><p class="text-lg text-muted mb-8 leading-relaxed max-w-lg"><?php echo esc_html($hp_s['sub']); ?></p><?php endif; ?>
+            <div class="flex flex-wrap items-center gap-4">
+                <a href="<?php echo home_url('/shop'); ?>" class="inline-block bg-primary text-white px-8 py-3.5 rounded-lg font-semibold hover:bg-primary-hover transition shadow-lg">Shop Now</a>
+                <?php if (!empty($hp_s['chips'][0])): ?><span class="text-sm text-muted font-medium">✓ <?php echo esc_html($hp_s['chips'][0]); ?></span><?php endif; ?>
+            </div>
+        </div>
+        <div class="relative">
+            <?php if ($hp_img): ?>
+            <div class="rounded-3xl overflow-hidden shadow-2xl aspect-[4/3]">
+                <img src="<?php echo esc_url($hp_img[0]); ?>" alt="" class="w-full h-full object-cover">
+            </div>
+            <?php if (!empty($hp_s['chips'])): $hp_ci = 0; foreach ((array) $hp_s['chips'] as $hp_c): if ($hp_ci++ === 0) continue; ?>
+            <span class="absolute <?php echo $hp_ci === 2 ? '-bottom-4 left-6' : '-top-4 right-6'; ?> bg-card border border-line shadow-lg text-xs font-semibold px-4 py-2.5 rounded-full">✓&nbsp; <?php echo esc_html($hp_c); ?></span>
+            <?php endforeach; endif; ?>
+            <?php endif; ?>
+        </div>
+    </div>
+</section>
+<?php else: ?>
 <section class="relative overflow-hidden">
     <?php if ($hp_img): ?>
     <img src="<?php echo esc_url($hp_img[0]); ?>" alt="" class="absolute inset-0 w-full h-full object-cover">
@@ -552,15 +584,33 @@ foreach ($hp_sections as $hp_s):
         <?php endif; ?>
     </div>
 </section>
-<?php elseif ($t === 'story'): ?>
+<?php endif; ?>
+<?php elseif ($t === 'story'):
+    $hp_simg = !empty($hp_s['image_id']) ? wp_get_attachment_image_src((int) $hp_s['image_id'], 'large') : false; ?>
+<?php if ($hp_simg): ?>
 <section class="bg-card">
-    <div class="max-w-3xl mx-auto px-4 md:px-6 py-20 md:py-28 text-center">
+    <div class="max-w-6xl mx-auto px-4 md:px-6 py-16 md:py-24 grid md:grid-cols-2 gap-12 items-center">
+        <div class="rounded-2xl overflow-hidden shadow-xl aspect-[4/3]">
+            <img src="<?php echo esc_url($hp_simg[0]); ?>" alt="" class="w-full h-full object-cover">
+        </div>
+        <div>
+            <p class="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-primary mb-4">Our Story</p>
+            <h2 class="text-3xl md:text-4xl font-heading font-bold tracking-tight mb-4 [text-wrap:balance]"><?php echo esc_html($hp_s['title']); ?></h2>
+            <div class="w-14 h-1 bg-accent rounded mb-7"></div>
+            <p class="text-muted leading-relaxed text-lg"><?php echo esc_html($hp_s['text']); ?></p>
+        </div>
+    </div>
+</section>
+<?php else: ?>
+<section class="bg-card">
+    <div class="max-w-3xl mx-auto px-4 md:px-6 py-16 md:py-24 text-center">
         <p class="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-primary mb-4">Our Story</p>
         <h2 class="text-3xl md:text-4xl font-heading font-bold tracking-tight mb-4"><?php echo esc_html($hp_s['title']); ?></h2>
         <div class="w-14 h-1 bg-accent rounded mx-auto mb-8"></div>
         <p class="text-muted leading-relaxed text-lg"><?php echo esc_html($hp_s['text']); ?></p>
     </div>
 </section>
+<?php endif; ?>
 <?php elseif ($t === 'category_strip' && class_exists('WooCommerce')):
     $hp_cats = get_terms(array('taxonomy' => 'product_cat', 'hide_empty' => true, 'number' => 6));
     if (!empty($hp_cats) && !is_wp_error($hp_cats)): ?>
@@ -572,17 +622,19 @@ foreach ($hp_sections as $hp_s):
     </div>
 </section>
 <?php endif; elseif ($t === 'bestsellers' && class_exists('WooCommerce')): ?>
-<section class="max-w-7xl mx-auto px-4 md:px-6 py-16 md:py-24">
+<section class="max-w-7xl mx-auto px-4 md:px-6 py-14 md:py-20">
     <div class="flex items-end justify-between mb-10">
         <div>
-            <h2 class="text-2xl md:text-3xl font-heading font-bold"><?php echo esc_html(!empty($hp_s['title']) ? $hp_s['title'] : 'Featured Products'); ?></h2>
+            <h2 class="text-3xl md:text-4xl font-heading font-bold tracking-tight"><?php echo esc_html(!empty($hp_s['title']) ? $hp_s['title'] : 'Featured Products'); ?></h2>
         </div>
         <a href="<?php echo home_url('/shop'); ?>" class="text-primary font-semibold text-sm hover:underline hidden md:block">View All &rarr;</a>
     </div>
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        <?php
-        $hp_products = wc_get_products(array('limit' => 8, 'status' => 'publish', 'orderby' => 'date'));
-        foreach ($hp_products as $hp_p):
+    <?php
+    $hp_products = wc_get_products(array('limit' => 8, 'status' => 'publish', 'orderby' => 'date'));
+    $hp_cols = min(4, max(2, count($hp_products)));
+    ?>
+    <div class="grid grid-cols-2 md:grid-cols-<?php echo min(3, $hp_cols); ?> lg:grid-cols-<?php echo $hp_cols; ?> gap-6">
+        <?php foreach ($hp_products as $hp_p):
             $hp_pimg = wp_get_attachment_image_src($hp_p->get_image_id(), 'medium');
         ?>
         <div class="bg-card rounded-xl shadow-sm border border-line overflow-hidden group hover:shadow-md hover:scale-[1.02] transition-all duration-300">
@@ -635,7 +687,7 @@ foreach ($hp_sections as $hp_s):
 </section>
 <?php elseif ($t === 'testimonials' && !empty($hp_s['items'])): ?>
 <section class="bg-surface">
-    <div class="max-w-7xl mx-auto px-4 md:px-6 py-20 md:py-28">
+    <div class="max-w-7xl mx-auto px-4 md:px-6 py-14 md:py-20">
         <h2 class="text-3xl md:text-4xl font-heading font-bold tracking-tight text-center mb-12"><?php echo esc_html(!empty($hp_s['title']) ? $hp_s['title'] : 'What our customers say'); ?></h2>
         <div class="grid md:grid-cols-<?php echo min(3, max(2, count((array) $hp_s['items']))); ?> gap-6">
             <?php foreach ((array) $hp_s['items'] as $hp_t): if (empty($hp_t['quote'])) continue; ?>
@@ -652,6 +704,14 @@ foreach ($hp_sections as $hp_s):
             </div>
             <?php endforeach; ?>
         </div>
+    </div>
+</section>
+<?php elseif ($t === 'cta_band'): ?>
+<section class="bg-primary">
+    <div class="max-w-5xl mx-auto px-4 md:px-6 py-16 md:py-20 text-center text-white">
+        <h2 class="text-3xl md:text-5xl font-heading font-bold tracking-tight mb-4 [text-wrap:balance]"><?php echo esc_html($hp_s['headline']); ?></h2>
+        <?php if (!empty($hp_s['text'])): ?><p class="text-white/80 text-lg mb-8"><?php echo esc_html($hp_s['text']); ?></p><?php endif; ?>
+        <a href="<?php echo home_url('/shop'); ?>" class="inline-block bg-white text-ink px-9 py-4 rounded-lg font-semibold hover:bg-white/90 transition shadow-lg"><?php echo esc_html(!empty($hp_s['button_label']) ? $hp_s['button_label'] : 'Shop Now'); ?></a>
     </div>
 </section>
 <?php elseif ($t === 'announcement'): /* rendered site-wide by header.php */ ?>
