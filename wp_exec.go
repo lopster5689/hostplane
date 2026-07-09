@@ -1630,15 +1630,19 @@ func (a *API) handleImageImportChunk(site string, params map[string]string) (str
 			return "", -1, fmt.Errorf("filename must be alphanumeric with .png/.jpg/.jpeg/.webp extension")
 		}
 		tmpImg := "/tmp/hp_img_" + uploadID + "_" + filename
+		// Cleanup is BEST-EFFORT and never part of the success chain: /tmp has
+		// the sticky bit and the staging file may belong to a different exec
+		// user — an rm failure must not fail a successful decode (it did,
+		// 2026-07-09).
 		out, exit, err := a.execWPCLI(site, []string{"sh", "-c",
-			"base64 -d " + staging + " > " + tmpImg + " && rm -f " + staging + " && stat -c %s " + tmpImg})
+			"base64 -d " + staging + " > " + tmpImg + " 2>&1 && stat -c %s " + tmpImg})
 		if err != nil {
 			return "", -1, err
 		}
 		if exit != 0 {
 			return "", -1, fmt.Errorf("staged decode failed: %s", strings.TrimSpace(out))
 		}
-		importCmd := []string{"sh", "-c", fmt.Sprintf("wp media import '%s' --porcelain --allow-root 2>&1 && rm -f '%s'", tmpImg, tmpImg)}
+		importCmd := []string{"sh", "-c", fmt.Sprintf("wp media import '%s' --porcelain --allow-root 2>&1", tmpImg)}
 		output, exitCode, ierr := a.execWPCLI(site, importCmd)
 		if ierr != nil {
 			return "", -1, fmt.Errorf("wp media import: %w", ierr)
@@ -1646,6 +1650,7 @@ func (a *API) handleImageImportChunk(site string, params map[string]string) (str
 		if exitCode != 0 {
 			return output, exitCode, nil
 		}
+		a.execWPCLI(site, []string{"sh", "-c", "rm -f " + staging + " " + tmpImg + " 2>/dev/null; true"})
 		attachID := strings.TrimSpace(output)
 		if title := params["title"]; title != "" {
 			a.execWPCLI(site, []string{"sh", "-c", fmt.Sprintf("wp post update %s --post_title='%s' --allow-root 2>&1", attachID, strings.ReplaceAll(title, "'", ""))})
