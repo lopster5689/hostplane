@@ -92,7 +92,7 @@ func (a *API) handleSetCustomDomain(c *gin.Context) {
 	// Step 1 [WordPress only]: update nginx sidecar — add custom domain to
 	// server_name and switch HTTP_HOST to $host
 	if isWP {
-		p := NewProvisioner(a.docker, a.cfg)
+		p := NewProvisioner(a.docker, a.cfg, a.db)
 		if err := p.writeNginxConfigWithDomains(
 			NginxContainerName(site), PHPContainerName(site),
 			existing.Domain, domain,
@@ -106,7 +106,7 @@ func (a *API) handleSetCustomDomain(c *gin.Context) {
 	if err := a.regenerateCaddy(site, existing.Domain, domain); err != nil {
 		// Rollback Step 1: revert nginx to single domain
 		if isWP {
-			p := NewProvisioner(a.docker, a.cfg)
+			p := NewProvisioner(a.docker, a.cfg, a.db)
 			p.writeNginxConfigWithDomains(NginxContainerName(site), PHPContainerName(site), existing.Domain, existing.CustomDomain)
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "caddy update failed: " + err.Error()})
@@ -117,7 +117,7 @@ func (a *API) handleSetCustomDomain(c *gin.Context) {
 	// Best-effort — WordPress tables may not exist yet if WP hasn't been installed.
 	// nginx $host passthrough means requests still work even if this fails.
 	if isWP {
-		p := NewProvisioner(a.docker, a.cfg)
+		p := NewProvisioner(a.docker, a.cfg, a.db)
 		if err := p.updateWordPressURLs(site, "https://"+domain); err != nil {
 			log.Printf("[WARN] site=%s wp_options update failed (non-fatal): %v", site, err)
 		}
@@ -172,7 +172,7 @@ func (a *API) handleRemoveCustomDomain(c *gin.Context) {
 	// ── Remove Infra FIRST ────────────────────────────────────────────
 	// Step 1 [WordPress only]: revert nginx to single domain, hardcoded HTTP_HOST
 	if isWP {
-		p := NewProvisioner(a.docker, a.cfg)
+		p := NewProvisioner(a.docker, a.cfg, a.db)
 		if err := p.writeNginxConfigWithDomains(
 			NginxContainerName(site), PHPContainerName(site),
 			existing.Domain, "",
@@ -186,7 +186,7 @@ func (a *API) handleRemoveCustomDomain(c *gin.Context) {
 	if err := a.regenerateCaddy(site, existing.Domain, ""); err != nil {
 		// Rollback Step 1: put nginx back with custom domain
 		if isWP {
-			p := NewProvisioner(a.docker, a.cfg)
+			p := NewProvisioner(a.docker, a.cfg, a.db)
 			p.writeNginxConfigWithDomains(NginxContainerName(site), PHPContainerName(site), existing.Domain, customDomain)
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "caddy revert failed: " + err.Error()})
@@ -195,7 +195,7 @@ func (a *API) handleRemoveCustomDomain(c *gin.Context) {
 
 	// Step 3 [WordPress only]: revert siteurl + home back to default subdomain
 	if isWP {
-		p := NewProvisioner(a.docker, a.cfg)
+		p := NewProvisioner(a.docker, a.cfg, a.db)
 		if err := p.updateWordPressURLs(site, "https://"+existing.Domain); err != nil {
 			log.Printf("[WARN] site=%s wp_options revert failed (non-fatal): %v", site, err)
 		}
@@ -240,7 +240,7 @@ func (a *API) regenerateCaddy(site, defaultDomain, customDomain string) error {
 			return err
 		}
 	default:
-		p := NewProvisioner(a.docker, a.cfg)
+		p := NewProvisioner(a.docker, a.cfg, a.db)
 		if err := p.writeCaddyConfig(site, NginxContainerName(site), defaultDomain, customDomain); err != nil {
 			return err
 		}
@@ -882,19 +882,29 @@ func (a *API) handleSiteStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"site":           s.Site,
-		"domain":         s.Domain,
-		"custom_domain":  s.CustomDomain,
-		"status":         s.Status,
-		"site_type":      s.SiteType,
-		"cert_status":    certStatus,
-		"warnings":       warnings,
-		"job_id":         s.JobID,
-		"user_id":        s.UserID,
-		"last_backup_at": s.LastBackupAt,
-		"created_at":     s.CreatedAt,
-		"updated_at":     s.UpdatedAt,
+		"site":              s.Site,
+		"domain":            s.Domain,
+		"custom_domain":     s.CustomDomain,
+		"status":            s.Status,
+		"site_type":         s.SiteType,
+		"wp_admin_user":     wpAdminUserFor(s),
+		"wp_admin_password": s.WPAdminPass,
+		"cert_status":       certStatus,
+		"warnings":          warnings,
+		"job_id":            s.JobID,
+		"user_id":           s.UserID,
+		"last_backup_at":    s.LastBackupAt,
+		"created_at":        s.CreatedAt,
+		"updated_at":        s.UpdatedAt,
 	})
+}
+
+// wpAdminUserFor: the fixed admin username, only for auto-installed WP sites.
+func wpAdminUserFor(s *Site) string {
+	if s.SiteType == "wordpress" && s.WPAdminPass != "" {
+		return "admin"
+	}
+	return ""
 }
 
 // GET /api/health

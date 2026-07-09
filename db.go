@@ -32,6 +32,7 @@ type Site struct {
 	UserID        string
 	SiteType      string // "wordpress", "static", "n8n"
 	EncryptionKey string // n8n only — persists N8N_ENCRYPTION_KEY across container recreations
+	WPAdminPass   string // wordpress only — generated at provision (core auto-install)
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	CustomDomain  string
@@ -141,6 +142,22 @@ func (d *DB) MigrateSchema() error {
 		ALTER TABLE sites
 		ADD COLUMN IF NOT EXISTS db_password VARCHAR(255) NULL DEFAULT NULL
 	`)
+	if err != nil {
+		return err
+	}
+	_, err = d.conn.Exec(`
+		ALTER TABLE sites
+		ADD COLUMN IF NOT EXISTS wp_admin_password VARCHAR(64) NULL DEFAULT NULL
+	`)
+	return err
+}
+
+// SetWPAdminPassword stores the generated wp-admin password for a site
+// (created once by the provisioner's core auto-install).
+func (d *DB) SetWPAdminPassword(site, pass string) error {
+	_, err := d.conn.Exec(`
+		UPDATE sites SET wp_admin_password=?, updated_at=NOW() WHERE site=?
+	`, pass, site)
 	return err
 }
 
@@ -156,11 +173,11 @@ func (d *DB) GetSite(site string) (*Site, error) {
 	var lastBackup sql.NullTime
 	err := d.conn.QueryRow(`
         SELECT site, domain, COALESCE(custom_domain,''), status, COALESCE(job_id,''), COALESCE(user_id,''),
-               COALESCE(site_type,'wordpress'), COALESCE(encryption_key,''),
+               COALESCE(site_type,'wordpress'), COALESCE(encryption_key,''), COALESCE(wp_admin_password,''),
                created_at, updated_at, last_backup_at
         FROM sites WHERE site=?
     `, site).Scan(&s.Site, &s.Domain, &s.CustomDomain, &s.Status, &s.JobID, &s.UserID,
-		&s.SiteType, &s.EncryptionKey,
+		&s.SiteType, &s.EncryptionKey, &s.WPAdminPass,
 		&s.CreatedAt, &s.UpdatedAt, &lastBackup)
 	if err != nil {
 		return nil, err

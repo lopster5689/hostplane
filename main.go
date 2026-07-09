@@ -65,7 +65,7 @@ func main() {
 
 	// ── Wire up components ───────────────────────────────
 	tunnel := NewTunnelManager(cfg)
-	provisioner := NewProvisioner(docker, cfg)
+	provisioner := NewProvisioner(docker, cfg, db)
 	staticProvisioner := NewStaticProvisioner(docker, cfg)
 	n8nProvisioner := NewN8nProvisioner(docker, cfg, db)
 	backupper := NewBackupper(docker, cfg, r2, db)

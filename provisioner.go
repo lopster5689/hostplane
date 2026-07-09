@@ -4,9 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -21,10 +25,11 @@ import (
 type Provisioner struct {
 	docker *client.Client
 	cfg    Config
+	db     *DB
 }
 
-func NewProvisioner(docker *client.Client, cfg Config) *Provisioner {
-	return &Provisioner{docker: docker, cfg: cfg}
+func NewProvisioner(docker *client.Client, cfg Config, db *DB) *Provisioner {
+	return &Provisioner{docker: docker, cfg: cfg, db: db}
 }
 
 func (p *Provisioner) Run(site string) error {
@@ -122,7 +127,112 @@ func (p *Provisioner) Run(site string) error {
 	certStatus := PollCaddyCert(p.docker, p.cfg, domain, 30*time.Second)
 	log.Printf("[provisioner] site=%s cert_status=%s", site, certStatus)
 
+	// Step 9: Install WordPress core — users must NEVER see the 5-minute
+	// install screen (the "666gg" class: sites that look provisioned but have
+	// no core tables; it also broke the AI editor on every fresh site,
+	// observed live 2026-07-09). Credentials are generated here, stored in
+	// the control DB, surfaced by the dashboard.
+	adminPass, err := p.installWordPressCore(site, phpName, domain)
+	if err != nil {
+		return rollback(fmt.Errorf("installWordPressCore: %w", err))
+	}
+	if p.db != nil {
+		stored := false
+		for attempt := 0; attempt < 3; attempt++ {
+			if err := p.db.SetWPAdminPassword(site, adminPass); err == nil {
+				stored = true
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+		if !stored {
+			log.Printf("[provisioner] site=%s WARNING: wp admin password could not be stored — user must reset via wp-cli", site)
+		}
+	}
+
+	// Step 10: Pre-install WooCommerce so store builds never pay the install
+	// detour. Non-fatal: prepare_store self-heals if this misses.
+	if out, code, werr := p.execWP(phpName, 3*time.Minute,
+		"wp plugin install woocommerce --activate --allow-root 2>&1"); werr != nil || code != 0 {
+		log.Printf("[provisioner] site=%s woocommerce pre-install skipped: %v %s", site, werr, firstLine(out))
+	} else {
+		log.Printf("[provisioner] site=%s woocommerce pre-installed", site)
+	}
+
 	return nil
+}
+
+// installWordPressCore waits for the WP image to finish seeding the volume,
+// then runs core install with generated credentials. Idempotent: an already-
+// installed site returns the empty password and no error.
+func (p *Provisioner) installWordPressCore(site, phpName, domain string) (string, error) {
+	// Already installed? (re-provision / retry path)
+	if _, code, err := p.execWP(phpName, 30*time.Second, "wp core is-installed --allow-root 2>&1"); err == nil && code == 0 {
+		return "", nil
+	}
+	passBytes := make([]byte, 12)
+	if _, err := rand.Read(passBytes); err != nil {
+		return "", fmt.Errorf("generate admin password: %w", err)
+	}
+	adminPass := hex.EncodeToString(passBytes) // 24 hex chars
+	installCmd := fmt.Sprintf(
+		"wp core install --url=https://%s --title=%s --admin_user=admin --admin_password=%s --admin_email=admin@%s --skip-email --allow-root 2>&1",
+		domain, shellQuote(site), adminPass, domain)
+	deadline := time.Now().Add(2 * time.Minute)
+	var lastOut string
+	for time.Now().Before(deadline) {
+		out, code, err := p.execWP(phpName, 60*time.Second, installCmd)
+		if err == nil && code == 0 {
+			log.Printf("[provisioner] site=%s wordpress core installed (admin)", site)
+			return adminPass, nil
+		}
+		if strings.Contains(out, "already installed") {
+			return adminPass, nil
+		}
+		lastOut = firstLine(out)
+		// The image entrypoint may still be copying core / generating
+		// wp-config on first boot — give it a moment and retry.
+		time.Sleep(5 * time.Second)
+	}
+	return "", fmt.Errorf("core install did not succeed in 2m: %s", lastOut)
+}
+
+// execWP runs a shell command inside the site's PHP container as www-data.
+func (p *Provisioner) execWP(phpName string, timeout time.Duration, shcmd string) (string, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	execResp, err := p.docker.ContainerExecCreate(ctx, phpName, types.ExecConfig{
+		User:         "33:33",
+		Cmd:          []string{"sh", "-c", shcmd},
+		AttachStdout: true,
+		AttachStderr: true,
+		WorkingDir:   "/var/www/html",
+	})
+	if err != nil {
+		return "", -1, fmt.Errorf("exec create: %w", err)
+	}
+	attachResp, err := p.docker.ContainerExecAttach(ctx, execResp.ID, types.ExecStartCheck{})
+	if err != nil {
+		return "", -1, fmt.Errorf("exec attach: %w", err)
+	}
+	defer attachResp.Close()
+	raw := stripDockerMuxAll(attachResp.Reader)
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, io.LimitReader(raw, 256*1024)); err != nil {
+		return "", -1, fmt.Errorf("read output: %w", err)
+	}
+	inspect, err := p.docker.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return strings.TrimSpace(buf.String()), -1, fmt.Errorf("exec inspect: %w", err)
+	}
+	return strings.TrimSpace(buf.String()), inspect.ExitCode, nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func (p *Provisioner) dropDatabase(dbName, dbUser string) {
