@@ -67,3 +67,24 @@ func TestSplitList(t *testing.T) {
 		t.Fatalf("empty should be nil")
 	}
 }
+
+func TestVerifyPageCatchesEscapedHTML(t *testing.T) {
+	body := "<html><title>Contact</title><body>&lt;h2&gt;Visit Us&lt;/h2&gt; and more text making this long enough to pass the size floor. " +
+		"padding padding padding padding padding padding padding padding padding padding</body></html>"
+	fails := verifyPageChecks(body, "200", nil, nil)
+	found := false
+	for _, f := range fails {
+		if strings.Contains(f, "escaped_html_visible") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("escaped-markup page must fail, got %v", fails)
+	}
+	clean := "<html><title>Contact</title><body><h2>Visit Us</h2> real markup, plenty of text here to pass the minimum body size check for the verifier padding padding padding padding padding</body></html>"
+	for _, f := range verifyPageChecks(clean, "200", nil, nil) {
+		if strings.Contains(f, "escaped_html_visible") {
+			t.Errorf("clean page wrongly flagged: %v", f)
+		}
+	}
+}

@@ -247,6 +247,15 @@ func verifyPageChecks(body, status string, expect, expectAbsent []string) []stri
 			break
 		}
 	}
+	// KSES-escaped markup rendering as visible text ("&lt;h2&gt;Visit Us..."
+	// on screen) — happens when content was written without unfiltered_html.
+	// A text-presence check can't see it; this string can.
+	for _, m := range []string{"&lt;h2&gt;", "&lt;p&gt;", "&lt;strong&gt;"} {
+		if strings.Contains(body, m) {
+			fails = append(fails, "escaped_html_visible (page shows raw <tags> as text — content was written without unfiltered_html; recreate via create_post)")
+			break
+		}
+	}
 	for _, want := range expect {
 		if !strings.Contains(low, strings.ToLower(want)) {
 			fails = append(fails, "missing:"+want)

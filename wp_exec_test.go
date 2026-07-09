@@ -50,17 +50,17 @@ func TestBuildTool_HappyPaths(t *testing.T) {
 		{
 			"update_post-title",
 			"update_post", map[string]string{"id": "42", "field": "post_title", "value": "new"},
-			[]string{"wp", "post", "update", "42", "--post_title=new", "--allow-root"},
+			[]string{"wp", "post", "update", "42", "--post_title=new", "--user=1", "--allow-root"},
 		},
 		{
 			"create_post-default-page",
 			"create_post", map[string]string{"post_title": "Hello"},
-			[]string{"wp", "post", "create", "--post_type=page", "--post_title=Hello", "--post_status=draft", "--allow-root"},
+			[]string{"wp", "post", "create", "--post_type=page", "--post_title=Hello", "--post_status=draft", "--user=1", "--allow-root"},
 		},
 		{
 			"create_post-with-content",
 			"create_post", map[string]string{"post_title": "Hi", "post_content": "Body"},
-			[]string{"wp", "post", "create", "--post_type=page", "--post_title=Hi", "--post_status=draft", "--allow-root", "--post_content=Body"},
+			[]string{"wp", "post", "create", "--post_type=page", "--post_title=Hi", "--post_status=draft", "--user=1", "--allow-root", "--post_content=Body"},
 		},
 		{
 			"list_plugins",

@@ -360,7 +360,7 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		if !postFieldAllowlist[field] {
 			return nil, fmt.Errorf("field %q is not allowed", field)
 		}
-		return []string{"wp", "post", "update", id, "--" + field + "=" + value, "--allow-root"}, nil
+		return []string{"wp", "post", "update", id, "--" + field + "=" + value, "--user=1", "--allow-root"}, nil
 
 	case "create_post":
 		postType := params["post_type"]
@@ -374,7 +374,7 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		if title == "" {
 			return nil, fmt.Errorf("post_title is required")
 		}
-		cmd := []string{"wp", "post", "create", "--post_type=" + postType, "--post_title=" + title, "--post_status=draft", "--allow-root"}
+		cmd := []string{"wp", "post", "create", "--post_type=" + postType, "--post_title=" + title, "--post_status=draft", "--user=1", "--allow-root"}
 		if content := params["post_content"]; content != "" {
 			cmd = append(cmd, "--post_content="+content)
 		}
