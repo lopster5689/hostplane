@@ -228,3 +228,12 @@ func TestValidateHomeSectionsV3Types(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreChecksCatchesDuplicateMenuItems(t *testing.T) {
+	st := goodStoreState()
+	st.MenuItems = append(st.MenuItems, storeMenuItem{Title: "Home", URL: "https://w1bench.cowsaidmoo.tech/"})
+	fails := storeChecks(st, "INR", specProducts())
+	if !strings.Contains(strings.Join(fails, " "), "menu_item_duplicated") {
+		t.Errorf("duplicate nav item must fail, got %v", fails)
+	}
+}

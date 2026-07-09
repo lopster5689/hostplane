@@ -222,10 +222,13 @@ Version: 1.0
   --color-primary: $primary;
   --color-secondary: $secondary;
   --color-accent: $accent;
-  --color-text: #1e293b;
-  --color-muted: #64748b;
-  --color-surface: #f8fafc;
-  --color-card: #ffffff;
+  /* Neutrals are DERIVED with a brand undertone (open-design T1: "every
+     gray has an undertone") — a warm store gets warm grays, a cool store
+     cool ones, automatically. */
+  --color-text: color-mix(in oklab, #1e293b 88%, $primary);
+  --color-muted: color-mix(in oklab, #64748b 82%, $primary);
+  --color-surface: color-mix(in oklab, #f8fafc 94%, $primary);
+  --color-card: color-mix(in oklab, #ffffff 97%, $primary);
   /* Derived — one decision computes its states (never hand-pick these). */
   --color-primary-hover: color-mix(in oklab, $primary, black 10%);
   --color-secondary-hover: color-mix(in oklab, $secondary, black 10%);
@@ -537,7 +540,7 @@ foreach ($hp_sections as $hp_s):
         <?php if (!empty($hp_s['eyebrow'])): ?>
         <p class="inline-block text-[0.7rem] font-semibold uppercase tracking-[0.22em] <?php echo $hp_img ? 'text-white/90 border border-white/30' : 'text-primary border border-line'; ?> rounded-full px-4 py-1.5 mb-6"><?php echo esc_html($hp_s['eyebrow']); ?></p>
         <?php endif; ?>
-        <h1 class="text-5xl md:text-7xl font-heading font-extrabold tracking-tight leading-[1.05] mb-6 max-w-3xl"><?php echo $hp_head_html; ?></h1>
+        <h1 class="text-5xl md:text-7xl font-heading font-extrabold tracking-tight leading-[1.05] mb-6 max-w-3xl [text-wrap:balance]"><?php echo $hp_head_html; ?></h1>
         <?php if (!empty($hp_s['sub'])): ?><p class="text-lg md:text-xl <?php echo $hp_img ? 'text-white/85' : 'text-muted'; ?> mb-9 max-w-2xl leading-relaxed"><?php echo esc_html($hp_s['sub']); ?></p><?php endif; ?>
         <a href="<?php echo home_url('/shop'); ?>" class="inline-block bg-primary text-white px-9 py-4 rounded-lg font-semibold hover:bg-primary-hover transition shadow-lg text-lg">Shop Now</a>
         <?php if (!empty($hp_s['chips'])): ?>

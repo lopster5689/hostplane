@@ -319,10 +319,16 @@ func storeChecks(st storeState, expectCurrency string, expectProducts []storePro
 			fails = append(fails, fmt.Sprintf("product_price_wrong: %s is %q but the approved spec says %q", want.Name, got, want.Price))
 		}
 	}
+	seenTitles := map[string]bool{}
 	for _, it := range st.MenuItems {
 		if it.URL == "" || !menuURLRe.MatchString(it.URL) {
 			fails = append(fails, fmt.Sprintf("menu_link_invalid: %q -> %q (add internal pages by post_id)", it.Title, it.URL))
 		}
+		key := strings.ToLower(strings.TrimSpace(it.Title))
+		if key != "" && seenTitles[key] {
+			fails = append(fails, fmt.Sprintf("menu_item_duplicated: %q appears twice (delete one with delete_menu_item)", it.Title))
+		}
+		seenTitles[key] = true
 	}
 	return fails
 }
