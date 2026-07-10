@@ -70,6 +70,13 @@ func (a *API) handlePrepareStore(site string, params map[string]string) (string,
 	phpCode := `
 		if (!class_exists('WooCommerce')) { echo 'prepare_store: WooCommerce still not active after install'; exit(1); }
 		$done = array('woocommerce active');
+		// Modern WooCommerce ships with "Coming Soon" gating store pages from
+		// visitors (nondeterministically!) — it hid a fully-built shop from a
+		// real founder test on 2026-07-10. Our dashboard is the launch gate.
+		if (get_option('woocommerce_coming_soon') !== 'no') {
+			update_option('woocommerce_coming_soon', 'no');
+			$done[] = 'coming-soon disabled (store visible to visitors)';
+		}
 		update_option('woocommerce_currency', '` + currency + `');
 		$done[] = 'currency=` + currency + `';
 		$name = base64_decode("` + nameB64 + `");
@@ -183,6 +190,11 @@ const storeStatePHP = `
 	$css = @file_get_contents(get_stylesheet_directory() . '/style.css');
 	$out['style_css'] = $css === false ? '' : substr($css, 0, 8192);
 	$out['products'] = array();
+	$out['coming_soon'] = (get_option('woocommerce_coming_soon') === 'yes');
+	$out['core_pages'] = array();
+	foreach (get_pages(array('post_status' => 'publish', 'number' => 8, 'sort_column' => 'ID')) as $cp) {
+		$out['core_pages'][] = array('title' => html_entity_decode($cp->post_title), 'path' => wp_make_link_relative(get_permalink($cp->ID)));
+	}
 	$out['shop_page'] = 0; $out['shop_status'] = ''; $out['shop_path'] = ''; $out['product_path'] = '';
 	if ($out['wc']) {
 		$ps = wc_get_products(array('limit' => 100, 'status' => 'publish'));
@@ -247,6 +259,28 @@ type storeState struct {
 	ProductPath     string          `json:"product_path"`
 	Products        []storeProduct  `json:"products"`
 	MenuItems       []storeMenuItem `json:"menu_items"`
+	ComingSoon      bool            `json:"coming_soon"`
+	CorePages       []corePage      `json:"core_pages"`
+}
+
+type corePage struct {
+	Title string `json:"title"`
+	Path  string `json:"path"`
+}
+
+// normalizeEntities makes name comparisons entity-insensitive: WordPress
+// stores "&" as "&amp;"/"&#038;" in titles and rendered HTML, which made the
+// literally-correct "Wall Mixer 3-in-1 (Bath & Shower)" fail its own check
+// forever (2026-07-10 founder session).
+func normalizeEntities(s string) string {
+	r := strings.NewReplacer(
+		"&amp;", "&", "&#038;", "&", "&#38;", "&",
+		"&#8211;", "–", "&ndash;", "–", "&#8212;", "—", "&mdash;", "—",
+		"&#8217;", "'", "&rsquo;", "'", "&#8216;", "'", "&lsquo;", "'",
+		"&#8220;", "\"", "&#8221;", "\"", "&quot;", "\"", "&#034;", "\"",
+		"&nbsp;", " ", "&#160;", " ",
+	)
+	return strings.TrimSpace(r.Replace(s))
 }
 
 type storeProduct struct {
@@ -296,6 +330,9 @@ func storeChecks(st storeState, expectCurrency string, expectProducts []storePro
 	if !st.WC {
 		fails = append(fails, "woocommerce_not_active")
 	} else {
+		if st.ComingSoon {
+			fails = append(fails, "store_in_coming_soon_mode (WooCommerce is hiding the shop and product pages from visitors — run prepare_store, or set option woocommerce_coming_soon to no)")
+		}
 		if st.ShopPageID <= 0 || st.ShopStatus != "publish" {
 			fails = append(fails, "shop_page_missing_or_unpublished (run prepare_store)")
 		}
@@ -315,7 +352,7 @@ func storeChecks(st storeState, expectCurrency string, expectProducts []storePro
 		var got string
 		found := false
 		for _, p := range st.Products {
-			if strings.EqualFold(strings.TrimSpace(p.Name), strings.TrimSpace(want.Name)) {
+			if strings.EqualFold(normalizeEntities(p.Name), normalizeEntities(want.Name)) {
 				found, got = true, p.Price
 				break
 			}
@@ -452,17 +489,26 @@ func (a *API) handleVerifyStore(site string, params map[string]string) (string, 
 	}
 	shopRenderPath := ""
 	if storeBuild && st.ShopPath != "" && verifyPagePathRe.MatchString(st.ShopPath) {
-		must := ""
-		if len(expectProducts) > 0 {
-			must = expectProducts[0].Name
-		}
-		checks = append(checks, renderCheck{st.ShopPath, must})
+		checks = append(checks, renderCheck{st.ShopPath, ""})
 		shopRenderPath = st.ShopPath
 	}
 	priceMarkerPath := ""
 	if storeBuild && st.ProductPath != "" && st.ProductPath != "/" && verifyPagePathRe.MatchString(st.ProductPath) {
 		checks = append(checks, renderCheck{st.ProductPath, ""})
 		priceMarkerPath = st.ProductPath
+	}
+	// Every published page gets a render pass when a store is being verified:
+	// the escaped-HTML/404 classes hid on Contact while only /, shop and one
+	// product were checked (founder-reported, 2026-07-10).
+	if storeBuild {
+		seen := map[string]bool{"/": true, st.ShopPath: true, st.ProductPath: true, params["path"]: true}
+		for _, cp := range st.CorePages {
+			if cp.Path == "" || seen[cp.Path] || !verifyPagePathRe.MatchString(cp.Path) {
+				continue
+			}
+			seen[cp.Path] = true
+			checks = append(checks, renderCheck{cp.Path, ""})
+		}
 	}
 	for _, rc := range checks {
 		body, status, _, ferr := a.fetchSitePage(site, rc.path)
@@ -481,6 +527,36 @@ func (a *API) handleVerifyStore(site string, params map[string]string) (string, 
 				continue
 			}
 			fails = append(fails, rc.path+": "+f)
+		}
+		// The shop grid must show EVERY spec product — checking just one name
+		// reported "missing:X" for an entirely hidden shop (Coming Soon mode)
+		// and let the other nine absences go unmentioned. Entity-normalized;
+		// crawls up to 3 shop pages before declaring a product missing.
+		if rc.path == shopRenderPath && len(expectProducts) > 0 {
+			corpus := normalizeEntities(strings.ToLower(body))
+			var missing []storeProduct
+			for _, want := range expectProducts {
+				if !strings.Contains(corpus, strings.ToLower(normalizeEntities(want.Name))) {
+					missing = append(missing, want)
+				}
+			}
+			for page := 2; page <= 3 && len(missing) > 0; page++ {
+				extra, estatus, _, eerr := a.fetchSitePage(site, strings.TrimRight(rc.path, "/")+fmt.Sprintf("/page/%d/", page))
+				if eerr != nil || estatus != "200" {
+					break
+				}
+				ec := normalizeEntities(strings.ToLower(extra))
+				var still []storeProduct
+				for _, m := range missing {
+					if !strings.Contains(ec, strings.ToLower(normalizeEntities(m.Name))) {
+						still = append(still, m)
+					}
+				}
+				missing = still
+			}
+			for _, m := range missing {
+				fails = append(fails, rc.path+": missing:"+m.Name)
+			}
 		}
 		// On OUR scaffolded themes the shop page must render the theme's
 		// styled grid, not WooCommerce's bare ul.products loop (which needs

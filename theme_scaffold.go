@@ -844,6 +844,29 @@ file_put_contents($dir . "/single-product.php", <<<'PRODUCT'
             <h1 class="text-3xl md:text-4xl font-heading font-bold"><?php the_title(); ?></h1>
             <div class="text-2xl text-primary font-bold"><?php echo $product ? $product->get_price_html() : ''; ?></div>
             <div class="prose max-w-none"><?php the_content(); ?></div>
+            <?php
+            // Spec table: structured attributes (GSM, Material, Fit, sourcing
+            // claims…) written by set_product_attributes render as a clean
+            // token-styled sheet. Products without specs skip this entirely.
+            $spec_attrs = ($product instanceof WC_Product) ? $product->get_attributes() : array();
+            if (!empty($spec_attrs)): ?>
+            <div class="mt-2 rounded-xl border border-line overflow-hidden">
+                <div class="px-4 py-2.5 bg-surface text-xs font-semibold tracking-widest uppercase text-muted">Specifications</div>
+                <dl class="divide-y divide-line">
+                    <?php foreach ($spec_attrs as $sa):
+                        if (!($sa instanceof WC_Product_Attribute) || !$sa->get_visible()) { continue; }
+                        $label = wc_attribute_label($sa->get_name());
+                        $vals = $sa->is_taxonomy()
+                            ? wp_list_pluck((array) $sa->get_terms(), 'name')
+                            : $sa->get_options(); ?>
+                    <div class="grid grid-cols-3 gap-3 px-4 py-2.5 text-sm">
+                        <dt class="text-muted"><?php echo esc_html($label); ?></dt>
+                        <dd class="col-span-2 text-ink"><?php echo esc_html(implode(', ', array_map('strval', (array) $vals))); ?></dd>
+                    </div>
+                    <?php endforeach; ?>
+                </dl>
+            </div>
+            <?php endif; ?>
             <div class="mt-2 [&_form.cart]:flex [&_form.cart]:items-center [&_form.cart]:gap-3 [&_.quantity_input]:w-20 [&_.quantity_input]:border [&_.quantity_input]:border-line [&_.quantity_input]:rounded-lg [&_.quantity_input]:px-3 [&_.quantity_input]:py-2 [&_form.cart_button]:bg-secondary [&_form.cart_button]:text-white [&_form.cart_button]:px-6 [&_form.cart_button]:py-3 [&_form.cart_button]:rounded-lg [&_form.cart_button]:font-semibold [&_form.cart_button]:border-0 [&_form.cart_button]:cursor-pointer">
                 <?php if ($product) { woocommerce_template_single_add_to_cart(); } ?>
             </div>

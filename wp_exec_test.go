@@ -270,3 +270,34 @@ func TestPageOnFrontPublishes(t *testing.T) {
 		t.Fatalf("page_on_front should publish via eval: %v", cmd[:2])
 	}
 }
+
+// 2026-07-10 founder-session regressions: entity-encoded titles must compare
+// equal, and Coming Soon mode must fail acceptance by name.
+func TestEntityNormalizedProductCheck(t *testing.T) {
+	st := storeState{WC: true, ShowOnFront: "page", FrontID: 5, FrontStatus: "publish",
+		PaymentsEnabled: 1, ShippingMethods: 1, PrivacyPage: true, TermsPage: true,
+		ShopPageID: 6, ShopStatus: "publish",
+		Products: []storeProduct{{Name: "Wall Mixer 3-in-1 (Bath &amp; Shower)", Price: "3499"}}}
+	fails := storeChecks(st, "", []storeProduct{{Name: "Wall Mixer 3-in-1 (Bath & Shower)", Price: "3499"}})
+	for _, f := range fails {
+		if strings.Contains(f, "product_missing") {
+			t.Fatalf("entity-encoded name should match: %v", fails)
+		}
+	}
+}
+
+func TestComingSoonFailsAcceptance(t *testing.T) {
+	st := storeState{WC: true, ComingSoon: true, ShowOnFront: "page", FrontID: 5, FrontStatus: "publish",
+		PaymentsEnabled: 1, ShippingMethods: 1, PrivacyPage: true, TermsPage: true,
+		ShopPageID: 6, ShopStatus: "publish"}
+	fails := storeChecks(st, "INR", nil)
+	found := false
+	for _, f := range fails {
+		if strings.Contains(f, "coming_soon") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("coming-soon must fail acceptance: %v", fails)
+	}
+}

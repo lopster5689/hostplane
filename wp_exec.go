@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -949,6 +950,76 @@ func buildTool(tool string, params map[string]string) ([]string, error) {
 		return []string{"wp", "rewrite", "structure", structure, "--allow-root"}, nil
 
 	// ── WooCommerce: Products ────────────────────────────────────
+	case "set_product_attributes":
+		// Structured product specs (GSM, Material, Fit, Pesticide-free…) from
+		// the CSV product shape — written as real WooCommerce attributes so
+		// the product page can render them as a spec table.
+		id := params["id"]
+		if id == "" {
+			return nil, fmt.Errorf("id is required")
+		}
+		if err := validatePostID(id); err != nil {
+			return nil, err
+		}
+		attrsJSON := params["attributes"]
+		if attrsJSON == "" {
+			return nil, fmt.Errorf("attributes is required: JSON array of {\"label\",\"value\"}")
+		}
+		var attrs []struct{ Label, Value string }
+		if err := json.Unmarshal([]byte(attrsJSON), &attrs); err != nil {
+			var alt []map[string]string
+			if err2 := json.Unmarshal([]byte(attrsJSON), &alt); err2 != nil {
+				return nil, fmt.Errorf("attributes must be a JSON array of {\"label\",\"value\"}: %v", err)
+			}
+			for _, m := range alt {
+				attrs = append(attrs, struct{ Label, Value string }{m["label"], m["value"]})
+			}
+		}
+		if len(attrs) == 0 || len(attrs) > 12 {
+			return nil, fmt.Errorf("attributes must contain 1..12 entries")
+		}
+		clean := make([][2]string, 0, len(attrs))
+		for _, a := range attrs {
+			label := strings.TrimSpace(a.Label)
+			value := strings.TrimSpace(a.Value)
+			if label == "" || value == "" {
+				continue
+			}
+			if len(label) > 60 {
+				label = label[:60]
+			}
+			if len(value) > 160 {
+				value = value[:160]
+			}
+			clean = append(clean, [2]string{label, value})
+		}
+		if len(clean) == 0 {
+			return nil, fmt.Errorf("no valid attribute entries after trimming")
+		}
+		payload, _ := json.Marshal(clean)
+		payloadB64 := base64.StdEncoding.EncodeToString(payload)
+		phpAttrs := `
+			$pid = ` + id + `;
+			$product = function_exists('wc_get_product') ? wc_get_product($pid) : null;
+			if (!$product) { echo 'not a product: ' . $pid; exit(1); }
+			$pairs = json_decode(base64_decode('` + payloadB64 + `'), true);
+			$attrs = array();
+			$pos = 0;
+			foreach ($pairs as $pair) {
+				$a = new WC_Product_Attribute();
+				$a->set_name(wp_strip_all_tags($pair[0]));
+				$a->set_options(array(wp_strip_all_tags($pair[1])));
+				$a->set_position($pos++);
+				$a->set_visible(true);
+				$a->set_variation(false);
+				$attrs[] = $a;
+			}
+			$product->set_attributes($attrs);
+			$product->save();
+			echo 'attributes set: ' . count($attrs);
+		`
+		return []string{"wp", "eval", phpAttrs, "--allow-root"}, nil
+
 	case "media_pass_state":
 		// Read-only, single round-trip snapshot for the photography pass:
 		// home sections, site icon, products with thumbnails, and which
@@ -1807,6 +1878,25 @@ func (a *API) handleImageImport(site string, params map[string]string) (string, 
 }
 
 // execWPCLI runs a WP-CLI command inside the php_<site> container and captures output.
+// scrubToolNoise drops known-harmless warning lines that leak into tool
+// outputs and pollute the model's context (observed distracting a live build):
+// the container has no sendmail, and wp-cli's phar cannot unlink the sticky
+// /tmp staging file it already processed.
+func scrubToolNoise(out string) string {
+	if out == "" {
+		return out
+	}
+	var kept []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "/usr/sbin/sendmail: not found") ||
+			(strings.Contains(line, "PHP Warning:") && strings.Contains(line, "unlink(/tmp/")) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
 func (a *API) execWPCLI(site string, cmd []string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1839,7 +1929,7 @@ func (a *API) execWPCLI(site string, cmd []string) (string, int, error) {
 	if err != nil {
 		return "", -1, fmt.Errorf("read output: %w", err)
 	}
-	output := strings.TrimSpace(buf.String())
+	output := scrubToolNoise(strings.TrimSpace(buf.String()))
 	if n >= int64(maxOutputBytes) {
 		output += "\n[output truncated at 1MB]"
 	}
