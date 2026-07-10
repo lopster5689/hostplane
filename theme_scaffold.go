@@ -233,7 +233,9 @@ Version: 1.0
   --color-primary-hover: color-mix(in oklab, $primary, black 10%);
   --color-secondary-hover: color-mix(in oklab, $secondary, black 10%);
   --color-border: color-mix(in oklab, var(--color-text) 12%, var(--color-surface));
-  --color-footer: color-mix(in oklab, var(--color-text) 90%, var(--color-primary));
+  /* Footer: dark but unmistakably the brand's — 28% primary over near-black
+     (a text-derived footer looked identical across every palette). */
+  --color-footer: color-mix(in oklab, var(--color-primary) 28%, #14181d);
   --font-heading: '$font_display', $display_fallback;
   --font-body: '$font_body', $body_fallback;
 }
@@ -637,7 +639,7 @@ foreach ($hp_sections as $hp_s):
         <?php foreach ($hp_products as $hp_p):
             $hp_pimg = wp_get_attachment_image_src($hp_p->get_image_id(), 'medium');
         ?>
-        <div class="bg-card rounded-xl shadow-sm border border-line overflow-hidden group hover:shadow-md hover:scale-[1.02] transition-all duration-300">
+        <a href="<?php echo $hp_p->get_permalink(); ?>" class="block bg-card rounded-xl shadow-sm border border-line overflow-hidden group hover:shadow-md hover:scale-[1.02] transition-all duration-300">
             <div class="aspect-square bg-surface overflow-hidden">
                 <?php if ($hp_pimg): ?>
                     <img src="<?php echo $hp_pimg[0]; ?>" alt="<?php echo esc_attr($hp_p->get_name()); ?>" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500">
@@ -648,9 +650,9 @@ foreach ($hp_sections as $hp_s):
                     <h3 class="font-heading font-semibold line-clamp-2"><?php echo $hp_p->get_name(); ?></h3>
                     <p class="text-primary font-bold whitespace-nowrap"><?php echo $hp_p->get_price_html(); ?></p>
                 </div>
-                <a href="<?php echo $hp_p->get_permalink(); ?>" class="block w-full border border-line text-center py-2.5 rounded-lg text-sm font-semibold hover:border-primary hover:text-primary transition">View Product</a>
+                <span class="block w-full border border-line text-center py-2.5 rounded-lg text-sm font-semibold group-hover:border-primary group-hover:text-primary transition">View Product</span>
             </div>
-        </div>
+        </a>
         <?php endforeach; ?>
     </div>
 </section>
@@ -779,12 +781,41 @@ FRONTPAGE
 // ═══════════════════════════════════════════════════════════════
 file_put_contents($dir . "/page.php", <<<'PAGE'
 <?php get_header(); ?>
-<main class="max-w-4xl mx-auto px-4 md:px-6 py-12">
-    <?php while (have_posts()) : the_post(); ?>
+<main class="max-w-4xl mx-auto px-4 md:px-6 py-12 md:py-16">
+    <?php while (have_posts()) : the_post();
+        $pg_slug = get_post_field('post_name');
+        $pg_contact = (strpos($pg_slug, 'contact') !== false) ? json_decode(get_option('hostplane_contact', '{}'), true) : null;
+    ?>
     <article>
-        <h1 class="text-3xl md:text-4xl font-heading font-bold mb-8"><?php the_title(); ?></h1>
-        <div class="prose max-w-none">
-            <?php the_content(); ?>
+        <header class="mb-8">
+            <h1 class="text-3xl md:text-4xl font-heading font-bold tracking-tight"><?php the_title(); ?></h1>
+            <div class="w-16 h-1 bg-primary rounded mt-4"></div>
+        </header>
+        <div class="grid gap-6 <?php echo (!empty($pg_contact) && is_array($pg_contact) && array_filter($pg_contact)) ? 'md:grid-cols-5' : ''; ?>">
+            <div class="bg-card border border-line rounded-2xl shadow-sm p-6 md:p-10 <?php echo (!empty($pg_contact) && is_array($pg_contact) && array_filter($pg_contact)) ? 'md:col-span-3' : ''; ?>">
+                <div class="prose max-w-none">
+                    <?php the_content(); ?>
+                </div>
+            </div>
+            <?php if (!empty($pg_contact) && is_array($pg_contact) && array_filter($pg_contact)): ?>
+            <aside class="bg-footer text-white rounded-2xl shadow-sm p-6 md:p-8 md:col-span-2 self-start">
+                <h2 class="font-heading font-bold text-lg mb-4">Reach us</h2>
+                <dl class="space-y-4 text-sm">
+                    <?php if (!empty($pg_contact['phone'])): ?>
+                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Phone</dt><dd><a class="hover:underline" href="tel:<?php echo esc_attr(preg_replace('/\s+/', '', $pg_contact['phone'])); ?>"><?php echo esc_html($pg_contact['phone']); ?></a></dd></div>
+                    <?php endif; ?>
+                    <?php if (!empty($pg_contact['email'])): ?>
+                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Email</dt><dd><a class="hover:underline" href="mailto:<?php echo esc_attr($pg_contact['email']); ?>"><?php echo esc_html($pg_contact['email']); ?></a></dd></div>
+                    <?php endif; ?>
+                    <?php if (!empty($pg_contact['address'])): ?>
+                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Address</dt><dd><?php echo esc_html($pg_contact['address']); ?></dd></div>
+                    <?php endif; ?>
+                    <?php if (!empty($pg_contact['hours'])): ?>
+                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Hours</dt><dd><?php echo esc_html($pg_contact['hours']); ?></dd></div>
+                    <?php endif; ?>
+                </dl>
+            </aside>
+            <?php endif; ?>
         </div>
     </article>
     <?php endwhile; ?>
