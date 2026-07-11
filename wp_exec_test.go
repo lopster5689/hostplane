@@ -301,3 +301,22 @@ func TestComingSoonFailsAcceptance(t *testing.T) {
 		t.Fatalf("coming-soon must fail acceptance: %v", fails)
 	}
 }
+
+// Founder-reported content classes: literal markdown and bracketed
+// placeholders must fail page verification.
+func TestMarkdownAndPlaceholderChecks(t *testing.T) {
+	body := "<html><body><p>**Email:** someone@x.com</p><p>[Contact Form Placeholder]</p></body></html>"
+	fails := verifyPageChecks(body, "200", nil, nil)
+	var md, ph bool
+	for _, f := range fails {
+		if strings.Contains(f, "markdown_visible") {
+			md = true
+		}
+		if strings.Contains(f, "placeholder_text") {
+			ph = true
+		}
+	}
+	if !md || !ph {
+		t.Fatalf("expected markdown+placeholder failures, got %v", fails)
+	}
+}

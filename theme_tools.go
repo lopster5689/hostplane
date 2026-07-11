@@ -296,6 +296,21 @@ func verifyPageChecks(body, status string, expect, expectAbsent []string) []stri
 			break
 		}
 	}
+	// Model-authored content classes that read as broken to visitors:
+	// literal markdown (WordPress renders HTML, not markdown) and bracketed
+	// placeholder tokens left in real pages (both founder-reported).
+	if textish := stripTags(body); textish != "" {
+		if strings.Contains(textish, "**") || strings.Contains(textish, "](http") {
+			fails = append(fails, "markdown_visible_as_text (page shows literal ** or []() — WordPress renders HTML, not markdown; rewrite the content via update_post using HTML tags)")
+		}
+		lowT := strings.ToLower(textish)
+		for _, ph := range []string{"placeholder]", "[placeholder", "lorem ipsum", "[contact form", "[your ", "[insert "} {
+			if strings.Contains(lowT, ph) {
+				fails = append(fails, "placeholder_text_visible (a bracketed placeholder is showing to visitors — replace it with real content or remove it)")
+				break
+			}
+		}
+	}
 	for _, want := range expect {
 		if !strings.Contains(low, strings.ToLower(want)) {
 			fails = append(fails, "missing:"+want)
@@ -424,4 +439,23 @@ func (a *API) activationGuard(site, slug string) (string, error) {
 			"). Finish writing them (write_theme_file), then activate — activating now would show visitors a broken site.", nil
 	}
 	return "", nil
+}
+
+
+// stripTags reduces rendered HTML to visible text for content-class checks.
+func stripTags(html string) string {
+	var b strings.Builder
+	in := false
+	for _, r := range html {
+		switch {
+		case r == '<':
+			in = true
+		case r == '>':
+			in = false
+			b.WriteByte(' ')
+		case !in:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
