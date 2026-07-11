@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -12,9 +13,9 @@ import (
 
 func TestBuildTool_HappyPaths(t *testing.T) {
 	cases := []struct {
-		name   string
-		tool   string
-		params map[string]string
+		name    string
+		tool    string
+		params  map[string]string
 		wantCmd []string // exact match
 	}{
 		{
@@ -123,10 +124,10 @@ func TestBuildTool_HappyPaths(t *testing.T) {
 
 func TestBuildTool_Errors(t *testing.T) {
 	cases := []struct {
-		name      string
-		tool      string
-		params    map[string]string
-		wantErr   string // substring to match
+		name    string
+		tool    string
+		params  map[string]string
+		wantErr string // substring to match
 	}{
 		{"unknown-tool", "wp_eval", nil, "unknown tool"},
 		{"unknown-tool-blank", "", nil, "unknown tool"},
@@ -369,5 +370,18 @@ func TestCategoryRequirementForLargeCatalogs(t *testing.T) {
 		if strings.Contains(f, "no_product_categories") {
 			t.Fatalf("categorized catalog should pass: %v", f)
 		}
+	}
+}
+
+// Zombie teardown: a missing site DB must classify as errBackupSourceDBMissing
+// so the destroyer proceeds instead of aborting.
+func TestDumpFailureClassification(t *testing.T) {
+	err := dumpFailureError(2, `mysqldump: Got error: 1049: "Unknown database 'wp_gone'" when selecting the database`)
+	if !errors.Is(err, errBackupSourceDBMissing) {
+		t.Fatalf("Unknown database stderr must wrap errBackupSourceDBMissing: %v", err)
+	}
+	err = dumpFailureError(2, "mysqldump: Access denied for user")
+	if errors.Is(err, errBackupSourceDBMissing) {
+		t.Fatalf("other failures must NOT read as missing DB: %v", err)
 	}
 }

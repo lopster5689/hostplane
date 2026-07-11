@@ -3,6 +3,7 @@ package main
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -320,7 +321,7 @@ func (b *Backupper) BackupDatabase(site string) error {
 		return fmt.Errorf("wait for mysqldump container: %w", waitErr)
 	}
 	if exitCode != 0 {
-		b.logContainerStderr(createResp.ID, fmt.Sprintf("mysqldump site=%s", site))
+		dumpStderr := b.logContainerStderr(createResp.ID, fmt.Sprintf("mysqldump site=%s", site))
 		if uploadErr == nil {
 			// The partial/empty object was successfully stored — delete it so R2
 			// never contains a corrupt backup that looks valid.
@@ -330,7 +331,7 @@ func (b *Backupper) BackupDatabase(site string) error {
 				log.Printf("[backupper] site=%s corrupt backup object %s deleted from R2", site, key)
 			}
 		}
-		return fmt.Errorf("mysqldump exited with code %d — backup aborted", exitCode)
+		return dumpFailureError(exitCode, dumpStderr)
 	}
 
 	if uploadErr != nil {
@@ -792,7 +793,20 @@ func (b *Backupper) waitContainer(ctx context.Context, containerID string) (int6
 // container. Used for post-mortem diagnostics when a backup container fails.
 // Reads the Docker multiplexed log stream directly — cannot reuse stripDockerMux
 // because that function filters to stdout (type 1) only.
-func (b *Backupper) logContainerStderr(containerID, label string) {
+// errBackupSourceDBMissing marks a dump failure caused by the site database
+// not existing at all — the destroyer treats this as "nothing to back up"
+// instead of aborting (zombie sites are exactly the ones we most need gone).
+var errBackupSourceDBMissing = errors.New("site database does not exist")
+
+// dumpFailureError classifies a mysqldump failure by its stderr.
+func dumpFailureError(exitCode int64, stderr string) error {
+	if strings.Contains(stderr, "Unknown database") {
+		return fmt.Errorf("mysqldump exited with code %d (%s): %w", exitCode, stderr, errBackupSourceDBMissing)
+	}
+	return fmt.Errorf("mysqldump exited with code %d — backup aborted", exitCode)
+}
+
+func (b *Backupper) logContainerStderr(containerID, label string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -802,7 +816,7 @@ func (b *Backupper) logContainerStderr(containerID, label string) {
 	})
 	if err != nil {
 		log.Printf("[backupper] %s: could not fetch stderr: %v", label, err)
-		return
+		return ""
 	}
 	defer logsReader.Close()
 
@@ -830,4 +844,5 @@ func (b *Backupper) logContainerStderr(containerID, label string) {
 	if buf.Len() > 0 {
 		log.Printf("[backupper] %s stderr: %s", label, strings.TrimSpace(buf.String()))
 	}
+	return strings.TrimSpace(buf.String())
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -28,7 +29,11 @@ func (d *Destroyer) Run(site, siteType string) error {
 	// during development / debugging when R2 is not yet configured.
 	if d.cfg.RequireBackupBeforeDestroy {
 		if err := d.backupper.BackupSite(site); err != nil {
-			return fmt.Errorf("pre-destroy backup failed, aborting destroy: %w", err)
+			if errors.Is(err, errBackupSourceDBMissing) {
+				log.Printf("[destroyer] site=%s database does not exist — nothing to back up, proceeding with destroy", site)
+			} else {
+				return fmt.Errorf("pre-destroy backup failed, aborting destroy: %w", err)
+			}
 		}
 	} else {
 		log.Printf("[destroyer] site=%s REQUIRE_BACKUP_BEFORE_DESTROY=false — skipping pre-destroy backup", site)
