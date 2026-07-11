@@ -320,3 +320,54 @@ func TestMarkdownAndPlaceholderChecks(t *testing.T) {
 		t.Fatalf("expected markdown+placeholder failures, got %v", fails)
 	}
 }
+
+// F14: advertised offers must be backed by store config.
+func TestAdvertisedOfferBacking(t *testing.T) {
+	base := storeState{WC: true, ShowOnFront: "page", FrontID: 5, FrontStatus: "publish",
+		PaymentsEnabled: 1, ShippingMethods: 1, PrivacyPage: true, TermsPage: true,
+		ShopPageID: 6, ShopStatus: "publish",
+		HomeSections: `[{"type":"announcement","chips":["10% off your first order","Fresh daily"]}]`}
+	fails := storeChecks(base, "INR", nil)
+	found := false
+	for _, f := range fails {
+		if strings.Contains(f, "advertised_offer_unbacked") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("percent-off with no coupon must fail: %v", fails)
+	}
+	base.CouponCount = 1
+	for _, f := range storeChecks(base, "INR", nil) {
+		if strings.Contains(f, "advertised_offer_unbacked") {
+			t.Fatalf("backed offer should pass: %v", f)
+		}
+	}
+}
+
+func TestCategoryRequirementForLargeCatalogs(t *testing.T) {
+	st := storeState{WC: true, ShowOnFront: "page", FrontID: 5, FrontStatus: "publish",
+		PaymentsEnabled: 1, ShippingMethods: 1, PrivacyPage: true, TermsPage: true,
+		ShopPageID: 6, ShopStatus: "publish"}
+	var many []storeProduct
+	for i := 0; i < 8; i++ {
+		many = append(many, storeProduct{Name: "Product " + string(rune(65+i)), Price: "10"})
+	}
+	st.Products = many
+	fails := storeChecks(st, "", many)
+	found := false
+	for _, f := range fails {
+		if strings.Contains(f, "no_product_categories") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("8 products with 0 categories must fail: %v", fails)
+	}
+	st.ProductCatCount = 3
+	for _, f := range storeChecks(st, "", many) {
+		if strings.Contains(f, "no_product_categories") {
+			t.Fatalf("categorized catalog should pass: %v", f)
+		}
+	}
+}

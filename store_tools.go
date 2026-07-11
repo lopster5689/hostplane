@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -191,6 +192,16 @@ const storeStatePHP = `
 	$out['style_css'] = $css === false ? '' : substr($css, 0, 8192);
 	$out['products'] = array();
 	$out['coming_soon'] = (get_option('woocommerce_coming_soon') === 'yes');
+	$out['coupon_count'] = count(get_posts(array('post_type' => 'shop_coupon', 'post_status' => 'publish', 'numberposts' => 10)));
+	$out['free_shipping'] = false;
+	if (class_exists('WC_Shipping_Zones')) {
+		$zz = WC_Shipping_Zones::get_zones(); $zz[] = array('zone_id' => 0);
+		foreach ($zz as $z) {
+			$zone = new WC_Shipping_Zone(is_array($z) ? $z['zone_id'] : 0);
+			foreach ($zone->get_shipping_methods(true) as $m) { if ($m->id === 'free_shipping') { $out['free_shipping'] = true; } }
+		}
+	}
+	$out['product_cat_count'] = count(get_terms(array('taxonomy' => 'product_cat', 'hide_empty' => true, 'exclude' => array(get_option('default_product_cat')))));
 	$out['core_pages'] = array();
 	foreach (get_pages(array('post_status' => 'publish', 'number' => 8, 'sort_column' => 'ID')) as $cp) {
 		$out['core_pages'][] = array('title' => html_entity_decode($cp->post_title), 'path' => wp_make_link_relative(get_permalink($cp->ID)));
@@ -261,11 +272,47 @@ type storeState struct {
 	MenuItems       []storeMenuItem `json:"menu_items"`
 	ComingSoon      bool            `json:"coming_soon"`
 	CorePages       []corePage      `json:"core_pages"`
+	CouponCount     int             `json:"coupon_count"`
+	FreeShipping    bool            `json:"free_shipping"`
+	ProductCatCount int             `json:"product_cat_count"`
 }
 
 type corePage struct {
 	Title string `json:"title"`
 	Path  string `json:"path"`
+}
+
+// percentOffRe matches advertised percent discounts ("10% off", "save 15%").
+var percentOffRe = regexp.MustCompile(`\d+\s*%\s*off|save\s*\d+\s*%`)
+
+// announcementText extracts the announcement/offer copy from the stored home
+// sections JSON so acceptance can cross-check advertised claims (F14).
+func announcementText(sectionsJSON string) string {
+	var secs []map[string]any
+	if json.Unmarshal([]byte(sectionsJSON), &secs) != nil {
+		return ""
+	}
+	var parts []string
+	for _, sc := range secs {
+		t, _ := sc["type"].(string)
+		if t == "announcement" {
+			if chips, ok := sc["chips"].([]any); ok {
+				for _, c := range chips {
+					if cs, ok := c.(string); ok {
+						parts = append(parts, cs)
+					}
+				}
+			}
+		}
+		if t == "offer_banner" {
+			for _, k := range []string{"headline", "sub", "text", "title"} {
+				if v, ok := sc[k].(string); ok {
+					parts = append(parts, v)
+				}
+			}
+		}
+	}
+	return strings.Join(parts, " | ")
 }
 
 // normalizeEntities makes name comparisons entity-insensitive: WordPress
@@ -346,6 +393,20 @@ func storeChecks(st storeState, expectCurrency string, expectProducts []storePro
 		}
 		if !st.PrivacyPage || !st.TermsPage {
 			fails = append(fails, "legal_pages_missing (prepare_store creates Privacy Policy + Terms)")
+		}
+		// Advertised promises must be backed by store config (F14): a live
+		// store once announced "10% off first order" with no coupon behind it.
+		if ann := announcementText(st.HomeSections); ann != "" {
+			low := strings.ToLower(ann)
+			if percentOffRe.MatchString(low) && st.CouponCount == 0 {
+				fails = append(fails, "advertised_offer_unbacked: the announcement promises a % discount but no coupon exists — create_coupon with that discount (or remove the claim)")
+			}
+			if (strings.Contains(low, "free delivery") || strings.Contains(low, "free shipping")) && !st.FreeShipping {
+				fails = append(fails, "advertised_offer_unbacked: the announcement promises free delivery/shipping but no free_shipping method exists — add_shipping_method free_shipping with the advertised minimum (or remove the claim)")
+			}
+		}
+		if len(expectProducts) > 6 && st.ProductCatCount == 0 {
+			fails = append(fails, "no_product_categories: with this many products the shop needs 2-4 categories — create_product_category then set_post_terms each product, and add a category_strip home section")
 		}
 	}
 	for _, want := range expectProducts {

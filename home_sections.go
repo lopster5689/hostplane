@@ -30,6 +30,9 @@ type homeSection struct {
 	Hours      []string `json:"hours,omitempty"`
 	Address    string   `json:"address,omitempty"`
 	Phone      string   `json:"phone,omitempty"`
+	Email      string   `json:"email,omitempty"`
+	WhatsApp   string   `json:"whatsapp,omitempty"`
+	Instagram  string   `json:"instagram,omitempty"`
 	// Layout: hero variant — "full" (default, image behind text) or "split"
 	// (content left on warm surface, framed image right — the editorial look).
 	Layout string `json:"layout,omitempty"`
@@ -124,6 +127,15 @@ func validateHomeSections(raw string) (string, error) {
 				}
 			}
 			if err == nil {
+				if err = capStr("email", s.Email, 120); err != nil {
+					return "", err
+				}
+				if err = capStr("whatsapp", s.WhatsApp, 24); err != nil {
+					return "", err
+				}
+				if err = capStr("instagram", s.Instagram, 80); err != nil {
+					return "", err
+				}
 				if err = capStr("address", s.Address, 200); err == nil {
 					err = capStr("phone", s.Phone, 30)
 				}
@@ -186,15 +198,19 @@ func (a *API) handleSetHomeSections(site string, params map[string]string) (stri
 	}
 	// Footer chrome reads the store contact site-wide: mirror hours_location.
 	var contact struct {
-		Hours   []string `json:"hours,omitempty"`
-		Address string   `json:"address,omitempty"`
-		Phone   string   `json:"phone,omitempty"`
+		Hours     []string `json:"hours,omitempty"`
+		Address   string   `json:"address,omitempty"`
+		Phone     string   `json:"phone,omitempty"`
+		Email     string   `json:"email,omitempty"`
+		WhatsApp  string   `json:"whatsapp,omitempty"`
+		Instagram string   `json:"instagram,omitempty"`
 	}
 	var secs []homeSection
 	_ = json.Unmarshal([]byte(norm), &secs)
 	for _, sc := range secs {
 		if sc.Type == "hours_location" {
 			contact.Hours, contact.Address, contact.Phone = sc.Hours, sc.Address, sc.Phone
+			contact.Email, contact.WhatsApp, contact.Instagram = sc.Email, sc.WhatsApp, sc.Instagram
 		}
 	}
 	contactJSON, _ := json.Marshal(contact)

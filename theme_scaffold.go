@@ -199,6 +199,10 @@ $display_fallback = '` + fontFallback(fontDisplay) + `';
 $body_fallback = 'system-ui, sans-serif';
 $fonts_url = '` + fontsURL + `';
 
+// Branded order emails: the store's own primary, not WooCommerce purple.
+update_option('woocommerce_email_base_color', $primary);
+update_option('woocommerce_email_footer_text', get_bloginfo('name') . ' — ' . get_bloginfo('description'));
+
 $dir = WP_CONTENT_DIR . "/themes/" . $slug;
 if (is_dir($dir)) { echo "Error: theme already exists"; exit(1); }
 mkdir($dir, 0755, true);
@@ -309,6 +313,24 @@ function THEME_PREFIX_widgets() {
     ));
 }
 add_action('widgets_init', 'THEME_PREFIX_widgets');
+
+// Branded empty-cart: WooCommerce's stock notice (blue bar + icon) fights
+// every palette and dead-ends the visitor. Replace with brand copy + picks.
+add_filter('wc_empty_cart_message', function () {
+    return 'Your cart is empty — these are worth a look.';
+});
+add_action('woocommerce_cart_is_empty', function () {
+    $picks = function_exists('wc_get_products') ? wc_get_products(array('limit' => 4, 'status' => 'publish', 'orderby' => 'date')) : array();
+    if (empty($picks)) { return; }
+    echo '<div class="grid grid-cols-2 lg:grid-cols-4 gap-6 mt-8 text-left">';
+    foreach ($picks as $pk) {
+        $img = wp_get_attachment_image_src($pk->get_image_id(), 'medium');
+        echo '<a href="' . esc_url($pk->get_permalink()) . '" class="block bg-card rounded-xl shadow-sm border border-line overflow-hidden group hover:shadow-md transition-all">';
+        echo '<div class="aspect-square bg-surface overflow-hidden">' . ($img ? '<img src="' . esc_url($img[0]) . '" alt="' . esc_attr($pk->get_name()) . '" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">' : '') . '</div>';
+        echo '<div class="p-4"><h3 class="font-heading font-semibold text-sm">' . esc_html($pk->get_name()) . '</h3><p class="text-primary font-bold text-sm mt-1">' . $pk->get_price_html() . '</p></div></a>';
+    }
+    echo '</div>';
+}, 20);
 FUNC
 );
 // Replace placeholders with the actual prefix + the curated fonts URL
@@ -399,6 +421,14 @@ if ($hp_ann && !empty($hp_ann['chips'])): ?>
             if (!empty($hp_hc['phone'])): ?>
             <a href="tel:<?php echo esc_attr(preg_replace('/[^0-9+]/', '', $hp_hc['phone'])); ?>" class="hidden lg:block text-sm font-semibold text-muted hover:text-primary transition"><?php echo esc_html($hp_hc['phone']); ?></a>
             <?php endif; ?>
+            <form role="search" method="get" action="<?php echo esc_url(home_url('/')); ?>" class="hidden md:flex items-center">
+                <input type="search" name="s" placeholder="Search products…" value="<?php echo esc_attr(get_search_query()); ?>"
+                    class="w-0 focus:w-48 transition-all duration-300 bg-transparent border-b border-transparent focus:border-line text-sm py-1 outline-none placeholder:text-muted" id="hp-search-input">
+                <input type="hidden" name="post_type" value="product">
+                <button type="submit" class="p-2 text-muted hover:text-ink" aria-label="Search" onclick="var i=document.getElementById('hp-search-input'); if(i && i.offsetWidth < 10){ i.focus(); event.preventDefault(); }">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z"/></svg>
+                </button>
+            </form>
             <?php if (class_exists('WooCommerce')): ?>
             <a href="<?php echo wc_get_cart_url(); ?>" class="relative p-2 text-muted hover:text-ink">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -486,12 +516,23 @@ file_put_contents($dir . "/footer.php", <<<'FOOTER'
                 <h4 class="font-semibold mb-4 text-xs uppercase tracking-[0.18em] text-white/50">Contact</h4>
                 <?php if (!empty($hp_contact['address'])): ?><p class="text-white/70 text-sm mb-2"><?php echo esc_html($hp_contact['address']); ?></p><?php endif; ?>
                 <?php if (!empty($hp_contact['phone'])): ?><p class="text-sm mb-3"><a href="tel:<?php echo esc_attr(preg_replace('/[^0-9+]/', '', $hp_contact['phone'])); ?>" class="text-white/90 font-semibold hover:text-white"><?php echo esc_html($hp_contact['phone']); ?></a></p><?php endif; ?>
+                <?php if (!empty($hp_contact['email'])): ?><p class="text-sm mb-2"><a href="mailto:<?php echo esc_attr($hp_contact['email']); ?>" class="text-white/80 hover:text-white"><?php echo esc_html($hp_contact['email']); ?></a></p><?php endif; ?>
                 <?php if (!empty($hp_contact['hours']) && is_array($hp_contact['hours'])): ?>
                 <ul class="space-y-1">
                     <?php foreach (array_slice($hp_contact['hours'], 0, 3) as $hp_h): ?>
                     <li class="text-white/60 text-xs"><?php echo esc_html($hp_h); ?></li>
                     <?php endforeach; ?>
                 </ul>
+                <?php endif; ?>
+                <?php if (!empty($hp_contact['whatsapp']) || !empty($hp_contact['instagram'])): ?>
+                <div class="flex gap-3 mt-4">
+                    <?php if (!empty($hp_contact['whatsapp'])): ?>
+                    <a href="https://wa.me/<?php echo esc_attr(preg_replace('/[^0-9]/', '', $hp_contact['whatsapp'])); ?>" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold px-3 py-1.5 rounded-full transition">WhatsApp</a>
+                    <?php endif; ?>
+                    <?php if (!empty($hp_contact['instagram'])): ?>
+                    <a href="https://instagram.com/<?php echo esc_attr(ltrim($hp_contact['instagram'], '@/')); ?>" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold px-3 py-1.5 rounded-full transition">Instagram</a>
+                    <?php endif; ?>
+                </div>
                 <?php endif; ?>
                 <?php if (empty($hp_contact['address']) && empty($hp_contact['phone'])): ?>
                 <p class="text-white/60 text-sm">Get in touch with us for any questions about your order.</p>
@@ -811,7 +852,13 @@ file_put_contents($dir . "/page.php", <<<'PAGE'
                     <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Address</dt><dd><?php echo esc_html($pg_contact['address']); ?></dd></div>
                     <?php endif; ?>
                     <?php if (!empty($pg_contact['hours'])): ?>
-                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Hours</dt><dd><?php echo esc_html($pg_contact['hours']); ?></dd></div>
+                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Hours</dt><dd><?php echo is_array($pg_contact['hours']) ? esc_html(implode(' · ', $pg_contact['hours'])) : esc_html($pg_contact['hours']); ?></dd></div>
+                    <?php endif; ?>
+                    <?php if (!empty($pg_contact['whatsapp'])): ?>
+                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">WhatsApp</dt><dd><a class="hover:underline" target="_blank" rel="noopener" href="https://wa.me/<?php echo esc_attr(preg_replace('/[^0-9]/', '', $pg_contact['whatsapp'])); ?>">Chat with us</a></dd></div>
+                    <?php endif; ?>
+                    <?php if (!empty($pg_contact['instagram'])): ?>
+                    <div><dt class="uppercase tracking-widest text-xs opacity-70 mb-1">Instagram</dt><dd><a class="hover:underline" target="_blank" rel="noopener" href="https://instagram.com/<?php echo esc_attr(ltrim($pg_contact['instagram'], '@/')); ?>">@<?php echo esc_html(ltrim($pg_contact['instagram'], '@/')); ?></a></dd></div>
                     <?php endif; ?>
                 </dl>
             </aside>
@@ -863,12 +910,34 @@ file_put_contents($dir . "/single-product.php", <<<'PRODUCT'
 <?php get_header(); ?>
 <main class="max-w-7xl mx-auto px-4 md:px-6 py-12">
     <?php while (have_posts()) : the_post(); global $product; if (!($product instanceof WC_Product) && function_exists('wc_get_product')) { $product = wc_get_product(get_the_ID()); } ?>
+    <nav class="text-sm text-muted mb-6" aria-label="Breadcrumb">
+        <a href="<?php echo esc_url(home_url('/')); ?>" class="hover:text-primary">Home</a>
+        <span class="mx-2">/</span>
+        <a href="<?php echo esc_url(get_permalink(wc_get_page_id('shop'))); ?>" class="hover:text-primary">Shop</a>
+        <span class="mx-2">/</span>
+        <span class="text-ink"><?php the_title(); ?></span>
+    </nav>
     <div class="grid md:grid-cols-2 gap-10 items-start">
-        <div class="bg-card rounded-xl shadow-sm border border-line overflow-hidden">
-            <?php if (has_post_thumbnail()): ?>
-                <?php the_post_thumbnail('large', array('class' => 'w-full h-auto object-cover')); ?>
-            <?php else: ?>
-                <div class="aspect-square bg-surface"></div>
+        <div>
+            <div class="bg-card rounded-xl shadow-sm border border-line overflow-hidden">
+                <?php if (has_post_thumbnail()): ?>
+                    <?php the_post_thumbnail('large', array('class' => 'w-full h-auto object-cover')); ?>
+                <?php else: ?>
+                    <div class="aspect-square bg-surface"></div>
+                <?php endif; ?>
+            </div>
+            <?php
+            // Gallery strip: renders when _product_image_gallery is set (the
+            // photography pass or a chat request can add shots any time).
+            $spg_ids = $product ? array_filter(array_map('absint', explode(',', (string) get_post_meta($product->get_id(), '_product_image_gallery', true)))) : array();
+            if (!empty($spg_ids)): ?>
+            <div class="grid grid-cols-4 gap-3 mt-3">
+                <?php foreach (array_slice($spg_ids, 0, 4) as $spg_id): $spg_src = wp_get_attachment_image_src($spg_id, 'medium'); if (!$spg_src) continue; ?>
+                <div class="aspect-square bg-surface rounded-lg overflow-hidden border border-line">
+                    <img src="<?php echo esc_url($spg_src[0]); ?>" alt="" class="w-full h-full object-cover">
+                </div>
+                <?php endforeach; ?>
+            </div>
             <?php endif; ?>
         </div>
         <div class="flex flex-col gap-4">
@@ -901,8 +970,60 @@ file_put_contents($dir . "/single-product.php", <<<'PRODUCT'
             <div class="mt-2 [&_form.cart]:flex [&_form.cart]:items-center [&_form.cart]:gap-3 [&_.quantity_input]:w-20 [&_.quantity_input]:border [&_.quantity_input]:border-line [&_.quantity_input]:rounded-lg [&_.quantity_input]:px-3 [&_.quantity_input]:py-2 [&_form.cart_button]:bg-secondary [&_form.cart_button]:text-white [&_form.cart_button]:px-6 [&_form.cart_button]:py-3 [&_form.cart_button]:rounded-lg [&_form.cart_button]:font-semibold [&_form.cart_button]:border-0 [&_form.cart_button]:cursor-pointer">
                 <?php if ($product) { woocommerce_template_single_add_to_cart(); } ?>
             </div>
+            <?php
+            // Trust row at the moment of decision: the announcement bar's
+            // claims, restated where purchase doubt lives. Falls back to the
+            // funnel floor's own guarantees.
+            $sp_chips = array();
+            $sp_secs = json_decode(get_option('hostplane_home_sections', '[]'), true);
+            if (is_array($sp_secs)) { foreach ($sp_secs as $sp_sec) {
+                if (($sp_sec['type'] ?? '') === 'announcement' && !empty($sp_sec['chips']) && is_array($sp_sec['chips'])) { $sp_chips = array_slice($sp_sec['chips'], 0, 3); break; }
+            } }
+            if (empty($sp_chips)) { $sp_chips = array('Cash on delivery available', 'Shipping across the country'); }
+            $sp_contact = json_decode(get_option('hostplane_contact', '{}'), true);
+            ?>
+            <div class="mt-4 pt-4 border-t border-line flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted">
+                <?php foreach ($sp_chips as $sp_chip): ?>
+                <span class="inline-flex items-center gap-1.5"><span class="text-primary">&#10003;</span> <?php echo esc_html($sp_chip); ?></span>
+                <?php endforeach; ?>
+                <?php if (!empty($sp_contact['whatsapp'])): ?>
+                <a href="https://wa.me/<?php echo esc_attr(preg_replace('/[^0-9]/', '', $sp_contact['whatsapp'])); ?>" class="inline-flex items-center gap-1.5 text-primary font-semibold hover:underline" target="_blank" rel="noopener">Order on WhatsApp</a>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
+    <?php
+    // You may also like: same category first, newest otherwise — the page
+    // must never dead-end.
+    $sp_rel = array();
+    if ($product) {
+        $sp_cat_ids = $product->get_category_ids();
+        if (!empty($sp_cat_ids)) {
+            $sp_rel = wc_get_products(array('limit' => 4, 'status' => 'publish', 'category' => array_map(function($t){ $term = get_term($t); return $term ? $term->slug : ''; }, $sp_cat_ids), 'exclude' => array($product->get_id())));
+        }
+        if (count($sp_rel) < 4) {
+            $sp_more = wc_get_products(array('limit' => 4 + 1, 'status' => 'publish', 'orderby' => 'date', 'exclude' => array($product->get_id())));
+            foreach ($sp_more as $sp_m) { $sp_have = false; foreach ($sp_rel as $sp_r) { if ($sp_r->get_id() === $sp_m->get_id()) { $sp_have = true; break; } } if (!$sp_have) { $sp_rel[] = $sp_m; } if (count($sp_rel) >= 4) break; }
+        }
+    }
+    if (!empty($sp_rel)): ?>
+    <section class="mt-16 pt-10 border-t border-line">
+        <h2 class="text-2xl font-heading font-bold mb-8">You may also like</h2>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-6">
+            <?php foreach ($sp_rel as $sp_p): $sp_img = wp_get_attachment_image_src($sp_p->get_image_id(), 'medium'); ?>
+            <a href="<?php echo esc_url($sp_p->get_permalink()); ?>" class="block bg-card rounded-xl shadow-sm border border-line overflow-hidden group hover:shadow-md transition-all">
+                <div class="aspect-square bg-surface overflow-hidden">
+                    <?php if ($sp_img): ?><img src="<?php echo esc_url($sp_img[0]); ?>" alt="<?php echo esc_attr($sp_p->get_name()); ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"><?php endif; ?>
+                </div>
+                <div class="p-4">
+                    <h3 class="font-heading font-semibold text-sm line-clamp-2"><?php echo esc_html($sp_p->get_name()); ?></h3>
+                    <p class="text-primary font-bold text-sm mt-1"><?php echo $sp_p->get_price_html(); ?></p>
+                </div>
+            </a>
+            <?php endforeach; ?>
+        </div>
+    </section>
+    <?php endif; ?>
     <?php endwhile; ?>
 </main>
 <?php get_footer(); ?>
