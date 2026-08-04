@@ -2,3 +2,4 @@
 
 # build artifact — deploy builds it fresh (never run a committed binary)
 control-plane
+.env
