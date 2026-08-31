@@ -193,6 +193,9 @@ func (p *N8nProvisioner) Run(site, plan string) error {
 	certStatus := PollCaddyCert(p.docker, p.cfg, domain, 30*time.Second)
 	log.Printf("[n8n-provisioner] site=%s cert_status=%s", site, certStatus)
 
+	// Step 8: Register the domain as a CF-for-SaaS custom hostname (non-fatal).
+	registerSaaSHostname(p.cfg, domain)
+
 	return nil
 }
 

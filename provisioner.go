@@ -159,6 +159,9 @@ func (p *Provisioner) Run(site string) error {
 		log.Printf("[provisioner] site=%s woocommerce pre-installed", site)
 	}
 
+	// Step 11: Register the domain as a CF-for-SaaS custom hostname (non-fatal).
+	registerSaaSHostname(p.cfg, domain)
+
 	return nil
 }
 

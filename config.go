@@ -60,6 +60,13 @@ type Config struct {
 	N8nImage         string // Docker image for n8n containers
 	N8nPGDSN         string // PostgreSQL admin DSN on state-01 for creating per-site n8n databases
 	N8nDockerNetwork string // Docker network for n8n containers (separate from wp_backend); Caddy must also join it
+
+	// Cloudflare-for-SaaS custom hostname registration (public reachability of
+	// <site>.<BaseDomain> through the customers.hosto.app wildcard). Empty
+	// token/zone disables it. Origin empty = the zone's fallback origin.
+	CFSaaSAPIToken     string
+	CFSaaSZoneID       string
+	CFSaaSOriginServer string
 }
 
 func LoadConfig() Config {
@@ -92,9 +99,12 @@ func LoadConfig() Config {
 		// Pin a concrete version — never :latest. n8n runs DB migrations on boot,
 		// so an unpinned tag can silently jump a major (e.g. 1.x→2.x) on container
 		// recreate and irreversibly migrate a customer's DB. Override per instance.
-		N8nImage:                   getEnv("N8N_IMAGE", "n8nio/n8n:2.27.4"),
-		N8nPGDSN:                   getEnv("N8N_PG_DSN", ""),
-		N8nDockerNetwork:           getEnv("N8N_DOCKER_NETWORK", "n8n_backend"),
+		N8nImage:           getEnv("N8N_IMAGE", "n8nio/n8n:2.27.4"),
+		N8nPGDSN:           getEnv("N8N_PG_DSN", ""),
+		N8nDockerNetwork:   getEnv("N8N_DOCKER_NETWORK", "n8n_backend"),
+		CFSaaSAPIToken:     getEnv("CF_SAAS_API_TOKEN", ""),
+		CFSaaSZoneID:       getEnv("CF_SAAS_ZONE_ID", ""),
+		CFSaaSOriginServer: getEnv("CF_SAAS_ORIGIN", ""),
 	}
 }
 

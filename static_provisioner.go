@@ -73,6 +73,9 @@ func (p *StaticProvisioner) Run(site, zipPath string) error {
 	log.Printf("[static_provisioner] site=%s cert_status=%s", site, certStatus)
 
 	os.Remove(zipPath)
+	// Register the domain as a CF-for-SaaS custom hostname (non-fatal).
+	registerSaaSHostname(p.cfg, domain)
+
 	return nil
 }
 
